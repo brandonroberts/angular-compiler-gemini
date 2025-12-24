@@ -18,6 +18,6 @@ export const appConfig: ApplicationConfig = {
       withFetch(),
       withInterceptors([requestContextInterceptor])
     ),
-    provideClientHydration(withEventReplay()),
+    // provideClientHydration(withEventReplay()),
   ],
 };
