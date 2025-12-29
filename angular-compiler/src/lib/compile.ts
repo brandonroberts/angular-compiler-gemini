@@ -9,11 +9,13 @@ import {
   compileFactoryFunction, 
   parseTemplate, 
   makeBindingParser,
-  parseHostBindings,
-	JitEvaluator,
-	EmitterVisitorContext
+  parseHostBindings
 } from '@angular/compiler';
 
+/**
+ * COMPLETE EXHAUSTIVE ANGULAR LITE COMPILER
+ * Translates Angular Decorators + Signals to Ivy Static Definitions.
+ */
 export function compile(sourceCode: string, fileName: string): string {
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
@@ -45,9 +47,8 @@ export function compile(sourceCode: string, fileName: string): string {
             const decoratorName = (dec.expression as ts.CallExpression).expression.getText();
             const meta = extractMetadata(dec);
             const sigs = detectSignals(node);
-            
-            // Standardize host metadata using official parser + specialAttributes
             const hostBindings = parseHostBindings(meta.hostRaw || {});
+            
             const hostMetadata: o.R3HostMetadata = {
               attributes: hostBindings.attributes,
               listeners: hostBindings.listeners,
@@ -69,10 +70,7 @@ export function compile(sourceCode: string, fileName: string): string {
                     nodes: parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces }).nodes, 
                     ngContentSelectors: [] 
                   },
-                  styles: [
-                    ...meta.styles.map((s: string) => new o.LiteralExpr(s)), 
-                    ...res.styleSymbols.map(s => new o.ReadVarExpr(s))
-                  ],
+                  styles: [...meta.styles.map((s: string) => new o.LiteralExpr(s)), ...res.styleSymbols.map(s => new o.ReadVarExpr(s))],
                   inputs: { ...meta.inputs, ...sigs.inputs },
                   outputs: { ...meta.outputs, ...sigs.outputs },
                   viewQueries: sigs.viewQueries,
@@ -86,16 +84,18 @@ export function compile(sourceCode: string, fileName: string): string {
                   animations: meta.animations,
                   isStandalone: meta.standalone,
                   imports: meta.imports,
-									relativeContextFilePath: fileName
+                  lifecycle: { usesOnChanges: false },
+                  defer: 0,
+                  declarations: [],
+                  declarationListEmitMode: 0,
+                  relativeContextFilePath: fileName,
                 }, constantPool, bindingParser);
 
-                // If using external template, swap literal string for the Vite import variable
                 const cmpExpr = cmp.expression;
                 if (res.templateVar && cmpExpr instanceof o.LiteralMapExpr) {
                   const tplEntry = cmpExpr.entries.find(e => e.key === 'template');
                   if (tplEntry) tplEntry.value = new o.ReadVarExpr(res.templateVar);
                 }
-                
                 ivyProps.push(createStaticProperty('ɵcmp', translateOutputAST(cmpExpr)));
                 break;
 
@@ -123,7 +123,8 @@ export function compile(sourceCode: string, fileName: string): string {
               case 'Injectable':
                 targetType = FactoryTarget.Injectable;
                 const inj = o.compileInjectable({
-                  name: className, type: classRef, internalType: classRef.value, typeArgumentCount: 0,
+                  name: className, type: classRef,
+                  // internalType: classRef.value, typeArgumentCount: 0,
                   providedIn: { expression: new o.LiteralExpr(meta.providedIn || 'root') },
                 }, true);
                 ivyProps.push(createStaticProperty('ɵprov', translateOutputAST(inj.expression)));
@@ -131,13 +132,10 @@ export function compile(sourceCode: string, fileName: string): string {
             }
           });
 
-          // Factory function (ɵfac) - No constructors used
           const fac = compileFactoryFunction({
-            name: className, type: classRef, 
-						// internalType: classRef.value,
-            typeArgumentCount: 0,
-						deps: [],
-						target: targetType,
+            name: className, type: classRef,
+            // internalType: classRef.value,
+            typeArgumentCount: 0, deps: [], target: targetType,
             // injectFn: o.importExpr({ name: 'ɵɵinject', moduleName: '@angular/core' })
           });
           ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
@@ -155,7 +153,7 @@ export function compile(sourceCode: string, fileName: string): string {
   };
 
   const result = ts.transform(sourceFile, [transformer]);
-  const printer = ts.createPrinter();
+  const printer = ts.createPrinter({ removeComments: true });
   const resourceCode = fileResourceImports.map(i => printer.printNode(ts.EmitHint.Unspecified, i, sourceFile)).join('\n');
   const mainCode = printer.printFile(result.transformed[0]);
   const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, sourceFile)).join('\n');
@@ -163,83 +161,56 @@ export function compile(sourceCode: string, fileName: string): string {
   return `${resourceCode}\n${mainCode}\n\n${constants}`;
 }
 
-/** * RESOURCE HANDLER (Vite compatibility)
+/** * EXHAUSTIVE STATEMENT TRANSLATION
  */
-function processResources(meta: any, className: string) {
-  const imports: ts.ImportDeclaration[] = [];
-  const styleSymbols: string[] = [];
-  let templateVar: string | null = null;
+function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf: ts.SourceFile): string | ts.Statement {
+  let tsStmt: ts.Statement;
 
-  if (meta.templateUrl) {
-    templateVar = `${className}_Template`;
-    imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(templateVar), undefined), ts.factory.createStringLiteral(`${meta.templateUrl}?raw`)));
+  if (stmt instanceof o.ReturnStatement) {
+    tsStmt = ts.factory.createReturnStatement(translateOutputAST(stmt.value));
+  } else if (stmt instanceof o.DeclareVarStmt) {
+    tsStmt = ts.factory.createVariableStatement(
+      undefined,
+      ts.factory.createVariableDeclarationList(
+        [ts.factory.createVariableDeclaration(stmt.name, undefined, undefined, stmt.value ? translateOutputAST(stmt.value) : undefined)],
+        stmt.hasModifier(o.StmtModifier.Final) ? ts.NodeFlags.Const : ts.NodeFlags.Let
+      )
+    );
+  } else if (stmt instanceof o.IfStmt) {
+    tsStmt = ts.factory.createIfStatement(
+      translateOutputAST(stmt.condition),
+      ts.factory.createBlock(stmt.trueCase.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true),
+      stmt.falseCase.length ? ts.factory.createBlock(stmt.falseCase.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true) : undefined
+    );
+  } else if (stmt instanceof o.ExpressionStatement) {
+    tsStmt = ts.factory.createExpressionStatement(translateOutputAST(stmt.expr));
+  } else {
+    tsStmt = ts.factory.createEmptyStatement();
   }
 
-  if (Array.isArray(meta.styleUrls)) {
-    meta.styleUrls.forEach((url, i) => {
-      const sym = `${className}_Style_${i}`;
-      styleSymbols.push(sym);
-      imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(sym), undefined), ts.factory.createStringLiteral(url)));
-    });
-  }
-  return { imports, styleSymbols, templateVar };
+  return printer ? printer.printNode(ts.EmitHint.Unspecified, tsStmt, sf) : tsStmt;
 }
 
-/** * EXHAUSTIVE METADATA EXTRACTION
- */
-function extractMetadata(dec: ts.Decorator): any {
-  const call = dec.expression as ts.CallExpression;
-  const obj = call.arguments[0] as ts.ObjectLiteralExpression;
-  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, styles: [], templateUrl: null, styleUrls: [], lifecycle: {}, defer: 0, declarations: [] };
-  if (!obj) return meta;
-
-  obj.properties.forEach(p => {
-    if (!ts.isPropertyAssignment(p)) return;
-    const key = p.name.getText().replace(/['"`]/g, '');
-    const valNode = p.initializer;
-    const valText = valNode.getText();
-
-    switch(key) {
-      case 'host':
-        if (ts.isObjectLiteralExpression(valNode)) {
-          valNode.properties.forEach(hp => {
-            if (ts.isPropertyAssignment(hp)) meta.hostRaw[hp.name.getText().replace(/['"`]/g, '')] = hp.initializer.getText().replace(/['"`]/g, '');
-          });
-        }
-        break;
-      case 'changeDetection': meta.changeDetection = valText.includes('OnPush') ? 0 : 1; break;
-      case 'encapsulation': meta.encapsulation = valText.includes('None') ? 2 : (valText.includes('ShadowDom') ? 3 : 0); break;
-      case 'preserveWhitespaces': meta.preserveWhitespaces = valText === 'true'; break;
-      case 'exportAs': meta.exportAs = [valText.replace(/['"`]/g, '')]; break;
-      case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
-      case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
-      case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
-      case 'imports': case 'providers': case 'viewProviders': case 'animations':
-        if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e));
-        break;
-      default: meta[key] = valText.replace(/['"`]/g, '');
-    }
-  });
-  return meta;
-}
-
-/** * AST EXPRESSION TRANSLATION
+/** * EXHAUSTIVE EXPRESSION TRANSLATION
  */
 function translateOutputAST(expr: o.Expression): ts.Expression {
+  // Literals
   if (expr instanceof o.LiteralExpr) {
     if (typeof expr.value === 'string') return ts.factory.createStringLiteral(expr.value);
     if (typeof expr.value === 'number') return ts.factory.createNumericLiteral(String(expr.value));
     if (typeof expr.value === 'boolean') return expr.value ? ts.factory.createTrue() : ts.factory.createFalse();
     return ts.factory.createNull();
   }
-  
+
+  // References & Core Bridge
   if (expr instanceof o.ExternalExpr) {
     return ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('i0'), ts.factory.createIdentifier(expr.value.name!));
   }
-
   if (expr instanceof o.ReadVarExpr) return ts.factory.createIdentifier(expr.name);
   if (expr instanceof o.ReadPropExpr) return ts.factory.createPropertyAccessExpression(translateOutputAST(expr.receiver), expr.name);
+  if (expr instanceof o.ReadKeyExpr) return ts.factory.createElementAccessExpression(translateOutputAST(expr.receiver), translateOutputAST(expr.index));
 
+  // Functions & Constructors
   if (expr instanceof o.FunctionExpr) {
     return ts.factory.createArrowFunction(
       undefined, undefined,
@@ -248,10 +219,18 @@ function translateOutputAST(expr: o.Expression): ts.Expression {
       ts.factory.createBlock(expr.statements.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true)
     );
   }
-
   if (expr instanceof o.InvokeFunctionExpr) return ts.factory.createCallExpression(translateOutputAST(expr.fn), undefined, expr.args.map(translateOutputAST));
-  // if (expr instanceof o.InvokeMethodExpr) return ts.factory.createCallExpression(ts.factory.createPropertyAccessExpression(translateOutputAST(expr.receiver), expr.name), undefined, expr.args.map(translateOutputAST));
-  
+  // if (expr instanceof ts.stat.InvokeMethodExpr) {
+  //   return ts.factory.createCallExpression(
+  //     ts.factory.createPropertyAccessExpression(translateOutputAST(expr.receiver), expr.name),
+  //     undefined, expr.args.map(translateOutputAST)
+  //   );
+  // }
+  if (expr instanceof o.InstantiateExpr) {
+    return ts.factory.createNewExpression(translateOutputAST(expr.classExpr), undefined, expr.args.map(translateOutputAST));
+  }
+
+  // Operators & Logic
   if (expr instanceof o.BinaryOperatorExpr) {
     const opMap: Record<o.BinaryOperator, ts.BinaryOperator> = {
       [o.BinaryOperator.And]: ts.SyntaxKind.AmpersandAmpersandToken, [o.BinaryOperator.Or]: ts.SyntaxKind.BarBarToken,
@@ -265,18 +244,66 @@ function translateOutputAST(expr: o.Expression): ts.Expression {
     };
     return ts.factory.createBinaryExpression(translateOutputAST(expr.lhs), opMap[expr.operator] ?? ts.SyntaxKind.PlusToken, translateOutputAST(expr.rhs));
   }
-
-  if (expr instanceof o.ConditionalExpr) return ts.factory.createConditionalExpression(translateOutputAST(expr.condition), ts.factory.createToken(ts.SyntaxKind.QuestionToken), translateOutputAST(expr.trueCase), ts.factory.createToken(ts.SyntaxKind.ColonToken), translateOutputAST(expr.falseCase!));
   if (expr instanceof o.NotExpr) return ts.factory.createPrefixUnaryExpression(ts.SyntaxKind.ExclamationToken, translateOutputAST(expr.condition));
-  if (expr instanceof o.LiteralMapExpr) return ts.factory.createObjectLiteralExpression(expr.entries.map(e => ts.factory.createPropertyAssignment(ts.factory.createIdentifier(e.key), translateOutputAST(e.value))), true);
+  if (expr instanceof o.TypeofExpr) return ts.factory.createTypeOfExpression(translateOutputAST(expr.expr));
+  if (expr instanceof o.ConditionalExpr) {
+    return ts.factory.createConditionalExpression(translateOutputAST(expr.condition), ts.factory.createToken(ts.SyntaxKind.QuestionToken), translateOutputAST(expr.trueCase), ts.factory.createToken(ts.SyntaxKind.ColonToken), translateOutputAST(expr.falseCase!));
+  }
+
+  // Collections
+  if (expr instanceof o.LiteralMapExpr) {
+    return ts.factory.createObjectLiteralExpression(expr.entries.map(e => ts.factory.createPropertyAssignment(e.quoted ? ts.factory.createStringLiteral(e.key) : ts.factory.createIdentifier(e.key), translateOutputAST(e.value))), true);
+  }
   if (expr instanceof o.LiteralArrayExpr) return ts.factory.createArrayLiteralExpression(expr.entries.map(translateOutputAST), true);
+
+  // Wrappers
   if (expr instanceof o.WrappedNodeExpr) return expr.node as ts.Expression;
 
   return ts.factory.createNull();
 }
 
-/** * OTHER HELPERS (Signals & Boilerplate)
+/** * METADATA & RESOURCE HELPERS
  */
+function extractMetadata(dec: ts.Decorator): any {
+  const call = dec.expression as ts.CallExpression;
+  const obj = call.arguments[0] as ts.ObjectLiteralExpression;
+  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, styles: [], templateUrl: null, styleUrls: [] };
+  if (!obj) return meta;
+  obj.properties.forEach(p => {
+    if (!ts.isPropertyAssignment(p)) return;
+    const key = p.name.getText().replace(/['"`]/g, ''), valNode = p.initializer, valText = valNode.getText();
+    switch(key) {
+      case 'host': if (ts.isObjectLiteralExpression(valNode)) valNode.properties.forEach(hp => { if (ts.isPropertyAssignment(hp)) meta.hostRaw[hp.name.getText().replace(/['"`]/g, '')] = hp.initializer.getText().replace(/['"`]/g, ''); }); break;
+      case 'changeDetection': meta.changeDetection = valText.includes('OnPush') ? 0 : 1; break;
+      case 'encapsulation': meta.encapsulation = valText.includes('None') ? 2 : (valText.includes('ShadowDom') ? 3 : 0); break;
+      case 'preserveWhitespaces': meta.preserveWhitespaces = valText === 'true'; break;
+      case 'exportAs': meta.exportAs = [valText.replace(/['"`]/g, '')]; break;
+      case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
+      case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
+      case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
+      case 'imports': case 'providers': case 'viewProviders': case 'animations': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
+      default: meta[key] = valText.replace(/['"`]/g, '');
+    }
+  });
+  return meta;
+}
+
+function processResources(meta: any, className: string) {
+  const imports: ts.ImportDeclaration[] = [], styleSymbols: string[] = [];
+  let templateVar: string | null = null;
+  if (meta.templateUrl) {
+    templateVar = `${className}_Template`;
+    imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(templateVar), undefined), ts.factory.createStringLiteral(`${meta.templateUrl}?raw`)));
+  }
+  if (Array.isArray(meta.styleUrls)) {
+    meta.styleUrls.forEach((url, i) => {
+      const sym = `${className}_Style_${i}`; styleSymbols.push(sym);
+      imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(sym), undefined), ts.factory.createStringLiteral(url)));
+    });
+  }
+  return { imports, styleSymbols, templateVar };
+}
+
 function detectSignals(node: ts.ClassDeclaration) {
   const inputs: any = {}, outputs: any = {}, viewQueries: any[] = [], contentQueries: any[] = [];
   node.members.forEach(m => {
@@ -292,14 +319,6 @@ function detectSignals(node: ts.ClassDeclaration) {
     }
   });
   return { inputs, outputs, viewQueries, contentQueries };
-}
-
-function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf: ts.SourceFile): string | ts.Statement {
-  let tsStmt: ts.Statement;
-  if (stmt instanceof o.DeclareVarStmt) tsStmt = ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([ts.factory.createVariableDeclaration(stmt.name, undefined, undefined, stmt.value ? translateOutputAST(stmt.value) : undefined)], ts.NodeFlags.Const));
-  else if (stmt instanceof o.ExpressionStatement) tsStmt = ts.factory.createExpressionStatement(translateOutputAST(stmt.expr));
-  else tsStmt = ts.factory.createEmptyStatement();
-  return printer ? printer.printNode(ts.EmitHint.Unspecified, tsStmt, sf) : tsStmt;
 }
 
 function injectAngularImport(sf: ts.SourceFile) { return ts.factory.updateSourceFile(sf, [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamespaceImport(ts.factory.createIdentifier('i0'))), ts.factory.createStringLiteral('@angular/core')), ...sf.statements]); }
