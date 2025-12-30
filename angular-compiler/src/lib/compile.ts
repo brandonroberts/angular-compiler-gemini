@@ -11,9 +11,11 @@ import {
   makeBindingParser,
   parseHostBindings
 } from '@angular/compiler';
+import { AstTranslator } from './ast-translator';
 
 // Global registry to store discovered selectors during the compilation pass
 const selectorRegistry = new Map<string, string>();
+const translator = new AstTranslator();
 
 /**
  * COMPLETE EXHAUSTIVE ANGULAR LITE COMPILER
@@ -87,6 +89,12 @@ export function compile(sourceCode: string, fileName: string): string {
                   };
                 });
                 const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
+
+                if (parsedTemplate.errors) {
+                  console.log(parsedTemplate.errors);
+                  return '';
+                }
+                
                 const cmp = compileComponentFromMetadata({
                   ...meta,
                   name: className,
@@ -149,9 +157,13 @@ export function compile(sourceCode: string, fileName: string): string {
               case 'Injectable':
                 targetType = FactoryTarget.Injectable;
                 const inj = o.compileInjectable({
-                  name: className, type: classRef,
-                  // internalType: classRef.value, typeArgumentCount: 0,
-                  providedIn: { expression: new o.LiteralExpr(meta.providedIn || 'root') },
+                  name: className,
+                  type: classRef,
+                  typeArgumentCount: 0,
+                  providedIn: {
+                    expression: new o.LiteralExpr(meta.providedIn || 'root'),
+                    forwardRef: 0
+                  },
                 }, true);
                 ivyProps.push(createStaticProperty('ɵprov', translateOutputAST(inj.expression)));
                 break;
@@ -191,105 +203,19 @@ export function compile(sourceCode: string, fileName: string): string {
   return `${resourceCode}\n${mainCode}\n\n${constants}`;
 }
 
-/** * EXHAUSTIVE STATEMENT TRANSLATION
- */
-function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf: ts.SourceFile): string | ts.Statement {
-  let tsStmt: ts.Statement;
-
-  if (stmt instanceof o.ReturnStatement) {
-    tsStmt = ts.factory.createReturnStatement(translateOutputAST(stmt.value));
-  } else if (stmt instanceof o.DeclareVarStmt) {
-    tsStmt = ts.factory.createVariableStatement(
-      undefined,
-      ts.factory.createVariableDeclarationList(
-        [ts.factory.createVariableDeclaration(stmt.name, undefined, undefined, stmt.value ? translateOutputAST(stmt.value) : undefined)],
-        stmt.hasModifier(o.StmtModifier.Final) ? ts.NodeFlags.Const : ts.NodeFlags.Let
-      )
-    );
-  } else if (stmt instanceof o.IfStmt) {
-    tsStmt = ts.factory.createIfStatement(
-      translateOutputAST(stmt.condition),
-      ts.factory.createBlock(stmt.trueCase.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true),
-      stmt.falseCase.length ? ts.factory.createBlock(stmt.falseCase.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true) : undefined
-    );
-  } else if (stmt instanceof o.ExpressionStatement) {
-    tsStmt = ts.factory.createExpressionStatement(translateOutputAST(stmt.expr));
-  } else {
-    tsStmt = ts.factory.createEmptyStatement();
-  }
-
-  return printer ? printer.printNode(ts.EmitHint.Unspecified, tsStmt, sf) : tsStmt;
-}
-
 /** * EXHAUSTIVE EXPRESSION TRANSLATION
  */
 function translateOutputAST(expr: o.Expression): ts.Expression {
-  // Literals
-  if (expr instanceof o.LiteralExpr) {
-    if (typeof expr.value === 'string') return ts.factory.createStringLiteral(expr.value);
-    if (typeof expr.value === 'number') return ts.factory.createNumericLiteral(String(expr.value));
-    if (typeof expr.value === 'boolean') return expr.value ? ts.factory.createTrue() : ts.factory.createFalse();
-    return ts.factory.createNull();
-  }
+  return expr.visitExpression(translator, null);
+}
 
-  // References & Core Bridge
-  if (expr instanceof o.ExternalExpr) {
-    return ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('i0'), ts.factory.createIdentifier(expr.value.name!));
-  }
-  if (expr instanceof o.ReadVarExpr) return ts.factory.createIdentifier(expr.name);
-  if (expr instanceof o.ReadPropExpr) return ts.factory.createPropertyAccessExpression(translateOutputAST(expr.receiver), expr.name);
-  if (expr instanceof o.ReadKeyExpr) return ts.factory.createElementAccessExpression(translateOutputAST(expr.receiver), translateOutputAST(expr.index));
+/** * EXHAUSTIVE STATEMENT TRANSLATION
+ */
+function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf: ts.SourceFile): string {
+  const tsNode = stmt.visitStatement(translator, null);
 
-  // Functions & Constructors
-  if (expr instanceof o.FunctionExpr) {
-    return ts.factory.createArrowFunction(
-      undefined, undefined,
-      expr.params.map(p => ts.factory.createParameterDeclaration(undefined, undefined, p.name, undefined, undefined, undefined)),
-      undefined, ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
-      ts.factory.createBlock(expr.statements.map(s => translateOutputASTStatement(s, null as any, null as any) as ts.Statement), true)
-    );
-  }
-  if (expr instanceof o.InvokeFunctionExpr) return ts.factory.createCallExpression(translateOutputAST(expr.fn), undefined, expr.args.map(translateOutputAST));
-  // if (expr instanceof ts.stat.InvokeMethodExpr) {
-  //   return ts.factory.createCallExpression(
-  //     ts.factory.createPropertyAccessExpression(translateOutputAST(expr.receiver), expr.name),
-  //     undefined, expr.args.map(translateOutputAST)
-  //   );
-  // }
-  if (expr instanceof o.InstantiateExpr) {
-    return ts.factory.createNewExpression(translateOutputAST(expr.classExpr), undefined, expr.args.map(translateOutputAST));
-  }
-
-  // Operators & Logic
-  if (expr instanceof o.BinaryOperatorExpr) {
-    const opMap: Record<o.BinaryOperator, ts.BinaryOperator> = {
-      [o.BinaryOperator.And]: ts.SyntaxKind.AmpersandAmpersandToken, [o.BinaryOperator.Or]: ts.SyntaxKind.BarBarToken,
-      [o.BinaryOperator.Equals]: ts.SyntaxKind.EqualsEqualsToken, [o.BinaryOperator.Identical]: ts.SyntaxKind.EqualsEqualsEqualsToken,
-      [o.BinaryOperator.NotEquals]: ts.SyntaxKind.ExclamationEqualsToken, [o.BinaryOperator.NotIdentical]: ts.SyntaxKind.ExclamationEqualsEqualsToken,
-      [o.BinaryOperator.Minus]: ts.SyntaxKind.MinusToken, [o.BinaryOperator.Plus]: ts.SyntaxKind.PlusToken,
-      [o.BinaryOperator.Divide]: ts.SyntaxKind.SlashToken, [o.BinaryOperator.Multiply]: ts.SyntaxKind.AsteriskToken,
-      [o.BinaryOperator.Modulo]: ts.SyntaxKind.PercentToken, [o.BinaryOperator.Lower]: ts.SyntaxKind.LessThanToken,
-      [o.BinaryOperator.LowerEquals]: ts.SyntaxKind.LessThanEqualsToken, [o.BinaryOperator.Bigger]: ts.SyntaxKind.GreaterThanToken,
-      [o.BinaryOperator.BiggerEquals]: ts.SyntaxKind.GreaterThanEqualsToken, [o.BinaryOperator.BitwiseAnd]: ts.SyntaxKind.AmpersandToken
-    };
-    return ts.factory.createBinaryExpression(translateOutputAST(expr.lhs), opMap[expr.operator] ?? ts.SyntaxKind.PlusToken, translateOutputAST(expr.rhs));
-  }
-  if (expr instanceof o.NotExpr) return ts.factory.createPrefixUnaryExpression(ts.SyntaxKind.ExclamationToken, translateOutputAST(expr.condition));
-  if (expr instanceof o.TypeofExpr) return ts.factory.createTypeOfExpression(translateOutputAST(expr.expr));
-  if (expr instanceof o.ConditionalExpr) {
-    return ts.factory.createConditionalExpression(translateOutputAST(expr.condition), ts.factory.createToken(ts.SyntaxKind.QuestionToken), translateOutputAST(expr.trueCase), ts.factory.createToken(ts.SyntaxKind.ColonToken), translateOutputAST(expr.falseCase!));
-  }
-
-  // Collections
-  if (expr instanceof o.LiteralMapExpr) {
-    return ts.factory.createObjectLiteralExpression(expr.entries.map(e => ts.factory.createPropertyAssignment(e.quoted ? ts.factory.createStringLiteral(e.key) : ts.factory.createIdentifier(e.key), translateOutputAST(e.value))), true);
-  }
-  if (expr instanceof o.LiteralArrayExpr) return ts.factory.createArrayLiteralExpression(expr.entries.map(translateOutputAST), true);
-
-  // Wrappers
-  if (expr instanceof o.WrappedNodeExpr) return expr.node as ts.Expression;
-
-  return ts.factory.createNull();
+  // Printer expects a Node, visitStatement returns one.
+  return printer.printNode(ts.EmitHint.Unspecified, tsNode as ts.Statement, sf);
 }
 
 /** * METADATA & RESOURCE HELPERS
