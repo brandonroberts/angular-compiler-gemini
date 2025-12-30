@@ -1,19 +1,14 @@
-import { Component, signal } from '@angular/core';
+import { Component } from '@angular/core';
+
+import { Counter } from './counter';
 
 @Component({
   selector: 'app-root',
   template: `
-    Hello World
+    <h1>Angular</h1>
 
-    Count: {{ count() }}
-    
-    <button (click)="increment()">Increment</button>
-  `
+    <app-counter></app-counter>
+  `,
+  imports: [Counter],
 })
-export class App {
-  count = signal(0);
-
-  increment() {
-    this.count.update(cnt => ++cnt);
-  }
-}
+export class App {}

@@ -1,10 +1,8 @@
 /// <reference types="vitest" />
 
-import { defineConfig, DepOptimizationConfig, ESBuildOptions } from 'vite';
-import analog from '@analogjs/platform';
+import { defineConfig, DepOptimizationConfig } from 'vite';
 import { compile } from './angular-compiler/src/lib/compile';
 import { JavaScriptTransformer } from '@angular/build/private';
-import { readFileSync } from 'node:fs';
 
 type EsbuildOptions = NonNullable<DepOptimizationConfig['esbuildOptions']>;
 type EsbuildPlugin = NonNullable<EsbuildOptions['plugins']>[number];
@@ -43,25 +41,25 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     {
       name: 'vite-angular-compiler',
-      // enforce: 'pre',
+      enforce: 'pre',
       transform: {
         filter: {
-          id: /.ts$/
+          id: /.ts$/,
+          code: {
+            include: [
+              /@(Component|Directive|Pipe|Injectable|NgModule)/
+            ]
+          }
         },
         handler(code, id) {
-          if ( id.includes('app.ts')) {
-          const file = readFileSync(id).toString('utf-8')
-          const result = compile(file, id);
-            console.log(id, result);
+          const result = compile(code, id);
+          // console.log(id);
           return {
-            code: result
+            code: result.replace('ɵɵdomElement(', 'ɵɵelement(')
           }
-          }
-          return;
         }
       }
     }
-    // analog(),
   ],
   test: {
     globals: true,

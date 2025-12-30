@@ -1,16 +1,19 @@
 import * as ts from 'typescript';
 import * as o from '@angular/compiler';
-import { 
-  ConstantPool, 
-  compileComponentFromMetadata, 
-  compileDirectiveFromMetadata, 
-  compilePipeFromMetadata, 
-  FactoryTarget, 
-  compileFactoryFunction, 
-  parseTemplate, 
+import {
+  ConstantPool,
+  compileComponentFromMetadata,
+  compileDirectiveFromMetadata,
+  compilePipeFromMetadata,
+  FactoryTarget,
+  compileFactoryFunction,
+  parseTemplate,
   makeBindingParser,
   parseHostBindings
 } from '@angular/compiler';
+
+// Global registry to store discovered selectors during the compilation pass
+const selectorRegistry = new Map<string, string>();
 
 /**
  * COMPLETE EXHAUSTIVE ANGULAR LITE COMPILER
@@ -24,6 +27,17 @@ export function compile(sourceCode: string, fileName: string): string {
   // Inject 'import * as i0 from "@angular/core"'
   sourceFile = injectAngularImport(sourceFile);
 
+  // Pass 1: Discover selectors in this file to populate the registry
+  sourceFile.statements.forEach(stmt => {
+    if (ts.isClassDeclaration(stmt) && stmt.name) {
+      const meta = extractMetadata(ts.getDecorators(stmt)?.[0]);
+      // console.log(stmt.name.text, meta.selector);
+      if (meta?.selector) {
+        selectorRegistry.set(stmt.name.text, meta.selector.split(',')[0].trim());
+      }
+    }
+  });
+
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     return (rootNode) => {
       const visitor = (node: ts.Node): ts.Node => {
@@ -36,9 +50,9 @@ export function compile(sourceCode: string, fileName: string): string {
           let targetType: FactoryTarget = FactoryTarget.Injectable;
 
           const classIdentifier = ts.factory.createIdentifier(className);
-          const classRef: o.R3Reference = { 
-            value: new o.WrappedNodeExpr(classIdentifier), 
-            type: new o.WrappedNodeExpr(classIdentifier) 
+          const classRef: o.R3Reference = {
+            value: new o.WrappedNodeExpr(classIdentifier),
+            type: new o.WrappedNodeExpr(classIdentifier)
           };
 
           const bindingParser = makeBindingParser();
@@ -48,7 +62,7 @@ export function compile(sourceCode: string, fileName: string): string {
             const meta = extractMetadata(dec);
             const sigs = detectSignals(node);
             const hostBindings = parseHostBindings(meta.hostRaw || {});
-            
+
             const hostMetadata: o.R3HostMetadata = {
               attributes: hostBindings.attributes,
               listeners: hostBindings.listeners,
@@ -61,14 +75,27 @@ export function compile(sourceCode: string, fileName: string): string {
                 targetType = FactoryTarget.Component;
                 const res = processResources(meta, className);
                 fileResourceImports.push(...res.imports);
-                
+
+                // Prepare component dependencies for standalone components
+                // 1. Map imports to R3TemplateDependency metadata.
+                // This is the "Linking" phase where we associate the class reference 
+                // with the string-based selector used in the template.
+                const declarations = (Array.isArray(meta.imports) ? meta.imports : []).map(dep => {
+                  return {
+                    type: dep,     // The Class Reference (e.g., ChildComponent)
+                    kind: 0   // Metadata kind for Components/Directives
+                  };
+                });
+                const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
                 const cmp = compileComponentFromMetadata({
                   ...meta,
                   name: className,
                   type: classRef,
-                  template: { 
-                    nodes: parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces }).nodes, 
-                    ngContentSelectors: [] 
+                  declarations,
+                  template: {
+                    nodes: parsedTemplate.nodes,
+                    ngContentSelectors: parsedTemplate.ngContentSelectors,
+                    preserveWhitespaces: parsedTemplate.preserveWhitespaces
                   },
                   styles: [...meta.styles.map((s: string) => new o.LiteralExpr(s)), ...res.styleSymbols.map(s => new o.ReadVarExpr(s))],
                   inputs: { ...meta.inputs, ...sigs.inputs },
@@ -86,8 +113,7 @@ export function compile(sourceCode: string, fileName: string): string {
                   imports: meta.imports,
                   lifecycle: { usesOnChanges: false },
                   defer: 0,
-                  declarations: [],
-                  declarationListEmitMode: 0,
+                  declarationListEmitMode: 0, // Direct
                   relativeContextFilePath: fileName,
                 }, constantPool, bindingParser);
 
@@ -133,16 +159,20 @@ export function compile(sourceCode: string, fileName: string): string {
           });
 
           const fac = compileFactoryFunction({
-            name: className, type: classRef,
-            // internalType: classRef.value,
-            typeArgumentCount: 0, deps: [], target: targetType,
-            // injectFn: o.importExpr({ name: 'ɵɵinject', moduleName: '@angular/core' })
+            name: className,
+            type: classRef,
+            typeArgumentCount: 0,
+            deps: [],
+            target: targetType,
           });
           ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
 
           return ts.factory.updateClassDeclaration(
-            node, node.modifiers?.filter(m => !ts.isDecorator(m)),
-            node.name, node.typeParameters, node.heritageClauses,
+            node,
+            node.modifiers?.filter(m => !ts.isDecorator(m)),
+            node.name,
+            node.typeParameters,
+            node.heritageClauses,
             [...node.members, ...ivyProps]
           );
         }
@@ -272,7 +302,7 @@ function extractMetadata(dec: ts.Decorator): any {
   obj.properties.forEach(p => {
     if (!ts.isPropertyAssignment(p)) return;
     const key = p.name.getText().replace(/['"`]/g, ''), valNode = p.initializer, valText = valNode.getText();
-    switch(key) {
+    switch (key) {
       case 'host': if (ts.isObjectLiteralExpression(valNode)) valNode.properties.forEach(hp => { if (ts.isPropertyAssignment(hp)) meta.hostRaw[hp.name.getText().replace(/['"`]/g, '')] = hp.initializer.getText().replace(/['"`]/g, ''); }); break;
       case 'changeDetection': meta.changeDetection = valText.includes('OnPush') ? 0 : 1; break;
       case 'encapsulation': meta.encapsulation = valText.includes('None') ? 2 : (valText.includes('ShadowDom') ? 3 : 0); break;
@@ -281,7 +311,7 @@ function extractMetadata(dec: ts.Decorator): any {
       case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
       case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
       case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
-      case 'imports': case 'providers': case 'viewProviders': case 'animations': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
+      case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
       default: meta[key] = valText.replace(/['"`]/g, '');
     }
   });
