@@ -8,7 +8,7 @@ import { Todos } from './todos';
   template: `
     <h1>Angular</h1>
 
-    <app-counter></app-counter>
+    <app-counter [name]="'Brandon'"></app-counter>
 
     <hr>
 

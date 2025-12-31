@@ -90,11 +90,31 @@ export function compile(sourceCode: string, fileName: string): string {
                 });
                 const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
+
+                // 1. Map Signal Inputs to Ivy Descriptors
+                const ivyInputs: Record<string, any> = {};
+
+                // Handle Decorator inputs (from @Component({ inputs: [...] }))
+                if (Array.isArray(meta.inputs)) {
+                  meta.inputs.forEach((i: string) => ivyInputs[i] = i);
+                } else if (meta.inputs) {
+                  Object.assign(ivyInputs, meta.inputs);
+                }
+
+                // Handle Signal/Model inputs
+                for (const [key, val] of Object.entries(sigs.inputs)) {
+                  // For Signal inputs, Ivy expects a descriptor object
+                  ivyInputs[key] = {
+                    classPropertyName: key,
+                    bindingPropertyName: key,
+                    isSignal: true
+                  };
+                }
                 if (parsedTemplate.errors) {
                   console.log(parsedTemplate.errors);
                   return '';
                 }
-                
+
                 const cmp = compileComponentFromMetadata({
                   ...meta,
                   name: className,
@@ -106,7 +126,7 @@ export function compile(sourceCode: string, fileName: string): string {
                     preserveWhitespaces: parsedTemplate.preserveWhitespaces
                   },
                   styles: [...meta.styles.map((s: string) => new o.LiteralExpr(s)), ...res.styleSymbols.map(s => new o.ReadVarExpr(s))],
-                  inputs: { ...meta.inputs, ...sigs.inputs },
+                  inputs: ivyInputs,
                   outputs: { ...meta.outputs, ...sigs.outputs },
                   viewQueries: sigs.viewQueries,
                   queries: sigs.contentQueries,
@@ -265,7 +285,17 @@ function detectSignals(node: ts.ClassDeclaration) {
   node.members.forEach(m => {
     if (ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer)) {
       const name = m.name.getText(), callExpr = m.initializer.expression.getText();
-      if (callExpr.includes('input')) inputs[name] = name;
+
+      // SIGNAL INPUT
+      if (callExpr.includes('input')) {
+        inputs[name] = {
+          classPropertyName: name,
+          bindingPropertyName: name,
+          isSignal: true,
+          required: callExpr.includes('.required')
+        };
+      }
+
       if (callExpr.includes('output')) outputs[name] = name;
       if (callExpr.includes('model')) { inputs[name] = name; outputs[name + 'Change'] = name + 'Change'; }
       if (callExpr.includes('Child') || callExpr.includes('Children')) {
