@@ -53,8 +53,10 @@ export default defineConfig(({ mode }) => ({
         },
         handler(code, id) {
           const result = compile(code, id);
-          // console.log(id);
+          
           return {
+            // Hacks because we lack global analysis currently,
+            // so components are treated as elements with props
             code: result.replace('ɵɵdomElement(', 'ɵɵelement(').replace('i0.ɵɵdomProperty("name", ctx.Brandon)', 'i0.ɵɵproperty("name", "Brandon")')
           }
         }

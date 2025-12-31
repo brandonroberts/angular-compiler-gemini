@@ -86,7 +86,6 @@ export function compile(sourceCode: string, fileName: string): string {
                 const declarations = (Array.isArray(meta.imports) ? meta.imports : []).map(dep => {
                   // Extract the class name from the WrappedNodeExpr
                   const className = dep.node.getText(); 
-                  console.log({ className });
                   
                   // Retrieve the selector we found during Pass 1
                   const selector = selectorRegistry.get(className);
