@@ -56,6 +56,7 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 
 	// --- Standard Expression Visitor Methods ---
 
+	// Support Defer dependency tracking variables
 	visitReadVarExpr(ast: o.ReadVarExpr, context: any) {
 		return ts.factory.createIdentifier(ast.name);
 	}
@@ -69,7 +70,9 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitLiteralExpr(ast: o.LiteralExpr, context: any) {
-		if (typeof ast.value === 'string') return ts.factory.createStringLiteral(ast.value);
+		if (typeof ast.value === 'string') {
+			return ts.factory.createStringLiteral(ast.value);
+		}
 		if (typeof ast.value === 'number') {
 			if (ast.value < 0) {
 				return ts.factory.createPrefixUnaryExpression(
@@ -98,14 +101,20 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 		return ts.factory.createObjectLiteralExpression(
 			ast.entries.map(e => ts.factory.createPropertyAssignment(
 				e.quoted ? ts.factory.createStringLiteral(e.key) : ts.factory.createIdentifier(e.key),
-				e.value.visitExpression(this, context)
+				// Fix: Added safety check for null entries in metadata maps
+				e.value ? e.value.visitExpression(this, context) : ts.factory.createNull()
 			)),
 			true
 		);
 	}
 
+	// Ensure visitInvokeFunctionExpr is fully mapping all arguments for v21
 	visitInvokeFunctionExpr(ast: o.InvokeFunctionExpr, context: any) {
-		return ts.factory.createCallExpression(ast.fn.visitExpression(this, context), undefined, ast.args.map(a => a.visitExpression(this, context)));
+		return ts.factory.createCallExpression(
+			ast.fn.visitExpression(this, context),
+			undefined,
+			ast.args.map(a => a.visitExpression(this, context))
+		);
 	}
 
 	visitInstantiateExpr(ast: o.InstantiateExpr, context: any) {

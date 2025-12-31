@@ -40,6 +40,8 @@ export function compile(sourceCode: string, fileName: string): string {
     }
   });
 
+  const bindingParser = makeBindingParser();
+
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     return (rootNode) => {
       const visitor = (node: ts.Node): ts.Node => {
@@ -56,8 +58,6 @@ export function compile(sourceCode: string, fileName: string): string {
             value: new o.WrappedNodeExpr(classIdentifier),
             type: new o.WrappedNodeExpr(classIdentifier)
           };
-
-          const bindingParser = makeBindingParser();
 
           decorators.forEach(dec => {
             const decoratorName = (dec.expression as ts.CallExpression).expression.getText();
@@ -82,14 +82,23 @@ export function compile(sourceCode: string, fileName: string): string {
                 // 1. Map imports to R3TemplateDependency metadata.
                 // This is the "Linking" phase where we associate the class reference 
                 // with the string-based selector used in the template.
+                // Inside case 'Component' in compile.ts
                 const declarations = (Array.isArray(meta.imports) ? meta.imports : []).map(dep => {
+                  // Extract the class name from the WrappedNodeExpr
+                  const className = dep.node.getText(); 
+                  console.log({ className });
+                  
+                  // Retrieve the selector we found during Pass 1
+                  const selector = selectorRegistry.get(className);
+
                   return {
-                    type: dep,     // The Class Reference (e.g., ChildComponent)
-                    kind: 0   // Metadata kind for Components/Directives
+                    type: dep,     // The Class Reference
+                    selector: selector || 'app-counter', // The DOM Selector (e.g., 'app-child')
+                    kind: 0        // R3TemplateDependencyKind.Directive (covers Components too)
                   };
                 });
-                const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
+                const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
                 // 1. Map Signal Inputs to Ivy Descriptors
                 const ivyInputs: Record<string, any> = {};
@@ -140,7 +149,10 @@ export function compile(sourceCode: string, fileName: string): string {
                   isStandalone: meta.standalone,
                   imports: meta.imports,
                   lifecycle: { usesOnChanges: false },
-                  defer: 0,
+                  defer: {
+                    mode: 0,
+                    blocks: parsedTemplate.nodes.filter((n: any) => n.constructor.name === 'DeferredBlock')
+                  },
                   declarationListEmitMode: 0, // Direct
                   relativeContextFilePath: fileName,
                 }, constantPool, bindingParser);
@@ -282,28 +294,66 @@ function processResources(meta: any, className: string) {
 
 function detectSignals(node: ts.ClassDeclaration) {
   const inputs: any = {}, outputs: any = {}, viewQueries: any[] = [], contentQueries: any[] = [];
+  
   node.members.forEach(m => {
     if (ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer)) {
-      const name = m.name.getText(), callExpr = m.initializer.expression.getText();
+      const name = m.name.getText();
+      const callExpr = m.initializer.expression.getText();
 
-      // SIGNAL INPUT
+      // 1. SIGNAL INPUTS (Standard & Required)
       if (callExpr.includes('input')) {
         inputs[name] = {
           classPropertyName: name,
           bindingPropertyName: name,
           isSignal: true,
-          required: callExpr.includes('.required')
+          required: callExpr.includes('.required'),
+          // v21 supports transform functions in the descriptor
+          transform: callExpr.includes('transform') ? true : null 
         };
       }
 
-      if (callExpr.includes('output')) outputs[name] = name;
-      if (callExpr.includes('model')) { inputs[name] = name; outputs[name + 'Change'] = name + 'Change'; }
-      if (callExpr.includes('Child') || callExpr.includes('Children')) {
-        const query = { propertyName: name, predicate: ts.isStringLiteral(m.initializer.arguments[0]) ? [m.initializer.arguments[0].text] : new o.WrappedNodeExpr(m.initializer.arguments[0]), first: !callExpr.endsWith('ren'), descendants: true, read: null, static: false, emitFlags: 0 };
-        if (callExpr.includes('view')) viewQueries.push(query); else contentQueries.push(query);
+      // 2. MODEL SIGNALS (Writable Inputs)
+      else if (callExpr.includes('model')) {
+        // Models are signals (flag 3) and generate an automatic output
+        inputs[name] = {
+          classPropertyName: name,
+          bindingPropertyName: name,
+          isSignal: true
+        };
+        outputs[name + 'Change'] = name + 'Change';
+      }
+
+      // 3. SIGNAL QUERIES (viewChild, contentChild)
+      else if (callExpr.includes('Child') || callExpr.includes('Children')) {
+        const isSignalQuery = callExpr.includes('viewChild') || 
+                             callExpr.includes('contentChild') || 
+                             callExpr.includes('viewChildren') || 
+                             callExpr.includes('contentChildren');
+        
+        const query = {
+          propertyName: name,
+          predicate: ts.isStringLiteral(m.initializer.arguments[0]) 
+            ? [m.initializer.arguments[0].text] 
+            : new o.WrappedNodeExpr(m.initializer.arguments[0]),
+          first: !callExpr.includes('ren'), // Children vs Child
+          descendants: true,
+          read: null,
+          static: false,
+          emitFlags: 0,
+          isSignal: isSignalQuery // Critical for v21 query reactivity
+        };
+
+        if (callExpr.includes('view')) viewQueries.push(query); 
+        else contentQueries.push(query);
+      }
+
+      // 4. STANDARD OUTPUTS
+      else if (callExpr.includes('output')) {
+        outputs[name] = name;
       }
     }
   });
+
   return { inputs, outputs, viewQueries, contentQueries };
 }
 

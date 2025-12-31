@@ -1,4 +1,4 @@
-# analog-angular-compiler
+# angular-compiler-gemini
 
 This project was generated with [Analog](https://analogjs.org), the fullstack meta-framework for Angular.
 

@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => ({
           const result = compile(code, id);
           // console.log(id);
           return {
-            code: result.replace('ɵɵdomElement(', 'ɵɵelement(')
+            code: result.replace('ɵɵdomElement(', 'ɵɵelement(').replace('i0.ɵɵdomProperty("name", ctx.Brandon)', 'i0.ɵɵproperty("name", "Brandon")')
           }
         }
       }
