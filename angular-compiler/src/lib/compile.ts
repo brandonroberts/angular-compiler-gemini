@@ -426,20 +426,75 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
     };
   };
 
-  const result = ts.transform(sourceFile, [transformer]);
-  const printer = ts.createPrinter({ removeComments: true });
-  const resourceCode = fileResourceImports.map(i => printer.printNode(ts.EmitHint.Unspecified, i, sourceFile)).join('\n');
-  const mainCode = printer.printFile(result.transformed[0]);
-  const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, sourceFile)).join('\n');
-
-  const outputCode = `${resourceCode}\n${mainCode}\n\n${constants}`;
-
-  // Generate source map using MagicString.
-  // Since ts.Printer produces a new string, we use overwrite on the
-  // original source to create a mapping. MagicString tracks the
-  // relationship between original and generated positions.
+  // Instead of ts.Printer (which loses positions), use MagicString to
+  // make surgical edits on the original source for accurate source maps.
   const ms = new MagicString(sourceCode, { filename: fileName });
-  ms.overwrite(0, sourceCode.length, outputCode);
+  const printer = ts.createPrinter({ removeComments: true });
+
+  // Use the original (pre-i0-injection) source file for position lookups
+  const origSourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
+
+  // 1. Prepend i0 import
+  ms.prepend('import * as i0 from "@angular/core";\n');
+
+  // 2. Apply the transform to get the compiled static fields,
+  //    but use MagicString for the actual edits
+  const result = ts.transform(sourceFile, [transformer]);
+  const transformedFile = result.transformed[0];
+
+  // Walk the original and transformed ASTs in parallel to find edits
+  for (let i = 0; i < origSourceFile.statements.length; i++) {
+    const origStmt = origSourceFile.statements[i];
+    // Find corresponding transformed statement (offset by 1 due to injected i0 import)
+    const transStmt = transformedFile.statements[i + 1];
+
+    if (!ts.isClassDeclaration(origStmt) || !ts.isClassDeclaration(transStmt)) continue;
+    if (!ts.getDecorators(origStmt)?.length) continue;
+
+    // Check if this class was transformed (has ivyProps)
+    const origMemberCount = origStmt.members.length;
+    const transMemberCount = transStmt.members.length;
+    if (transMemberCount <= origMemberCount) continue; // No new members added
+
+    // Remove Angular decorators from original source
+    const angularDecs = ts.getDecorators(origStmt)?.filter(dec => {
+      if (!ts.isCallExpression(dec.expression)) return false;
+      const name = dec.expression.expression.getText(origSourceFile);
+      return ['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule'].includes(name);
+    }) || [];
+
+    for (const dec of angularDecs) {
+      // Remove from @ to end of decorator call, including trailing whitespace
+      const start = dec.getStart(origSourceFile);
+      const end = dec.getEnd();
+      // Find the next non-whitespace after the decorator
+      let trimEnd = end;
+      while (trimEnd < sourceCode.length && (sourceCode[trimEnd] === ' ' || sourceCode[trimEnd] === '\n' || sourceCode[trimEnd] === '\r')) {
+        trimEnd++;
+      }
+      ms.remove(start, trimEnd);
+    }
+
+    // Print the new static members (ɵfac, ɵcmp, etc.) and insert before closing }
+    const addedMembers = transStmt.members.slice(origMemberCount);
+    if (addedMembers.length > 0) {
+      const memberCode = addedMembers
+        .map(m => '  ' + printer.printNode(ts.EmitHint.Unspecified, m, transformedFile))
+        .join('\n');
+
+      // Find the closing brace of the original class
+      const classEnd = origStmt.getEnd();
+      // Insert before the closing }
+      ms.appendLeft(classEnd - 1, '\n' + memberCode + '\n');
+    }
+  }
+
+  // 3. Append constant pool statements
+  const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, origSourceFile)).join('\n');
+  if (constants) {
+    ms.append('\n\n' + constants);
+  }
+
   const map = ms.generateMap({
     source: fileName,
     file: fileName + '.js',
@@ -448,7 +503,7 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
   });
 
   return {
-    code: outputCode,
+    code: ms.toString(),
     map,
     resourceDependencies,
   };
