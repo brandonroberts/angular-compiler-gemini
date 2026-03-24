@@ -682,6 +682,46 @@ describe('@Component', () => {
       expect(result).toContain('_nghost-%COMP%');
     });
 
+    it('accepts pre-resolved SCSS styles via resolvedStyles option', () => {
+      const compiledCss = ':host { display: block; } .wrapper { padding: 1rem; } .wrapper h1 { color: #333; }';
+      const stylePath = require('path').resolve(__dirname, '__fixtures__/test.component.scss');
+      const resolvedStyles = new Map([[stylePath, compiledCss]]);
+
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-scss',
+          template: '<p>hi</p>',
+          styleUrls: ['./__fixtures__/test.component.scss']
+        })
+        export class ScssComponent {}
+      `, __filename, { resolvedStyles });
+
+      expect(result.code).toContain('styles:');
+      // Resolved CSS is used (not raw SCSS)
+      expect(result.code).toContain('padding');
+      expect(result.code).toContain('_nghost-%COMP%');
+      // No SCSS syntax in output
+      expect(result.code).not.toContain('$primary');
+      expect(result.code).not.toContain('$padding');
+    });
+
+    it('falls back to raw file when no resolvedStyles provided for SCSS', () => {
+      // Without resolvedStyles, SCSS is inlined as-is (raw text)
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-raw-scss',
+          template: '<p>hi</p>',
+          styleUrls: ['./__fixtures__/test.component.scss']
+        })
+        export class RawScssComponent {}
+      `, __filename);
+
+      // Raw SCSS variables appear since no preprocessor ran
+      expect(result).toContain('$primary');
+    });
+
     it('inlines both templateUrl and styleUrls together', () => {
       const result = compile(`
         import { Component } from '@angular/core';

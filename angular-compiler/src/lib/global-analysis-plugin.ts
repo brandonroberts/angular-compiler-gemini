@@ -1,4 +1,4 @@
-import { Plugin } from 'vite';
+import { Plugin, ResolvedConfig, preprocessCSS } from 'vite';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ComponentRegistry } from './registry';
@@ -21,6 +21,45 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   const dependents = new Map<string, Set<string>>(); // className → set of files that import it
   // Track external resource → parent .ts file for reload on resource change
   const resourceToSource = new Map<string, string>(); // resource path → .ts file path
+  let resolvedConfig: ResolvedConfig;
+
+  /**
+   * Extract styleUrl/styleUrls from source, read and preprocess them via Vite.
+   * Returns a Map of absolute path → compiled CSS for the compiler to use.
+   */
+  async function resolveStyleFiles(code: string, id: string): Promise<Map<string, string> | undefined> {
+    // Quick check: does the source reference external styles?
+    if (!code.includes('styleUrl')) return undefined;
+
+    // Extract styleUrl and styleUrls paths with a simple regex
+    const styleUrls: string[] = [];
+    const singleMatch = code.match(/styleUrl\s*:\s*['"`]([^'"`]+)['"`]/);
+    if (singleMatch) styleUrls.push(singleMatch[1]);
+    const arrayMatch = code.matchAll(/styleUrls\s*:\s*\[([^\]]+)\]/g);
+    for (const m of arrayMatch) {
+      const urls = m[1].matchAll(/['"`]([^'"`]+)['"`]/g);
+      for (const u of urls) styleUrls.push(u[1]);
+    }
+
+    if (styleUrls.length === 0) return undefined;
+
+    const result = new Map<string, string>();
+    const dir = path.dirname(id);
+
+    for (const url of styleUrls) {
+      if (!/\.(scss|sass|less|styl)$/.test(url)) continue;
+      const filePath = path.resolve(dir, url);
+      try {
+        const source = fs.readFileSync(filePath, 'utf-8');
+        const processed = await preprocessCSS(source, filePath, resolvedConfig);
+        result.set(filePath, processed.code);
+      } catch (e: any) {
+        console.warn(`[angular-compiler] Style preprocessing failed for ${filePath}: ${e.message}`);
+      }
+    }
+
+    return result.size > 0 ? result : undefined;
+  }
 
   function scanDirectory(dir: string) {
     if (!fs.existsSync(dir)) return;
@@ -52,6 +91,10 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
     name: 'vite-angular-global-analysis',
     enforce: 'pre',
 
+    configResolved(config) {
+      resolvedConfig = config;
+    },
+
     buildStart() {
       registry.clear();
       for (const dir of srcDirs) {
@@ -76,8 +119,11 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
           include: [DECORATOR_RE]
         }
       },
-      handler(code, id) {
-        const result = compile(code, id, registry);
+      async handler(code, id) {
+        // Pre-resolve style files: read and preprocess SCSS/Sass/Less via Vite
+        const resolvedStyles = await resolveStyleFiles(code, id);
+
+        const result = compile(code, id, { registry, resolvedStyles });
         // Track resource dependencies for file watching
         for (const dep of result.resourceDependencies) {
           resourceToSource.set(dep, id);

@@ -158,7 +158,10 @@ The compiler is split into two phases:
 | `@defer` lazy dependency loading | Requires global analysis of which imports are defer-only |
 | Partial / linker compilation | Handled by separate plugin |
 | HMR (hot module replacement) | Requires `ngtsc` HMR tracking metadata; falls back to page reload |
-| CSS scoping for `styleUrl` files | Styles are inlined as raw CSS strings; SCSS/Less preprocessing requires a separate Vite plugin |
+
+### Style Preprocessing
+
+External styles (`.scss`, `.sass`, `.less`, `.styl`) are preprocessed via Vite's `preprocessCSS` API before inlining. The global analysis plugin's async transform handler resolves and compiles style files, then passes the CSS to the compiler via the `resolvedStyles` option. This uses whatever CSS preprocessor Vite has configured (Sass, Less, Stylus) — no additional dependencies needed.
 
 ### File Watching
 
@@ -265,7 +268,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-139 tests across 13 spec files:
+141 tests across 13 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|

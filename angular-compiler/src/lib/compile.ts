@@ -49,7 +49,17 @@ export interface CompileResult {
   resourceDependencies: string[];
 }
 
-export function compile(sourceCode: string, fileName: string, registry?: ComponentRegistry): CompileResult {
+export interface CompileOptions {
+  registry?: ComponentRegistry;
+  /** Pre-resolved style contents keyed by absolute file path (e.g. SCSS already compiled to CSS). */
+  resolvedStyles?: Map<string, string>;
+}
+
+export function compile(sourceCode: string, fileName: string, optionsOrRegistry?: CompileOptions | ComponentRegistry): CompileResult {
+  // Backward compat: accept ComponentRegistry directly
+  const opts: CompileOptions = optionsOrRegistry instanceof Map ? { registry: optionsOrRegistry } : (optionsOrRegistry || {});
+  const registry = opts.registry;
+  const resolvedStyles = opts.resolvedStyles;
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
@@ -178,12 +188,14 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   }
                 }
 
-                // Resolve styles: read styleUrl/styleUrls files and inline their content
+                // Resolve styles: read styleUrl/styleUrls files and inline their content.
+                // Preprocessed styles (SCSS→CSS) are provided via resolvedStyles map.
                 if (Array.isArray(meta.styleUrls)) {
                   for (const url of meta.styleUrls) {
                     try {
                       const stylePath = path.resolve(path.dirname(fileName), url);
-                      const styleContent = fs.readFileSync(stylePath, 'utf-8');
+                      const styleContent = resolvedStyles?.get(stylePath)
+                        ?? fs.readFileSync(stylePath, 'utf-8');
                       meta.styles.push(styleContent);
                       resourceDependencies.push(stylePath);
                     } catch {
