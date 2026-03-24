@@ -134,7 +134,11 @@ The compiler is split into two phases:
 | `@defer` lazy dependency loading | Requires global analysis of which imports are defer-only |
 | Partial / linker compilation | Handled by separate plugin |
 | HMR (hot module replacement) | Requires `ngtsc` HMR tracking metadata; falls back to page reload |
-| CSS scoping for `styleUrl` files | Styles are inlined as strings; SCSS requires Vite preprocessing |
+| CSS scoping for `styleUrl` files | Styles are inlined as raw CSS strings; SCSS/Less preprocessing requires a separate Vite plugin |
+
+### File Watching
+
+External templates (`templateUrl`) and styles (`styleUrl`/`styleUrls`) are read and inlined at compile time. The global analysis plugin tracks these resource dependencies and invalidates the parent `.ts` module when the external file changes, triggering a page reload with the updated content.
 
 ## Comparison with Angular's Compilers
 
@@ -237,11 +241,11 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-111 tests across 11 spec files:
+115 tests across 11 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
-| `component.spec.ts` | 39 | All @Component features, signals (including required variants), control flow, defer, pipes, content projection, external resources, providers |
+| `component.spec.ts` | 43 | All @Component features, signals (including required variants), control flow, defer, pipes, content projection, external resources, resource dependencies, providers |
 | `ast-translator.spec.ts` | 42 | Every AST visitor method (expressions + statements) |
 | `directive.spec.ts` | 2 | Host bindings, exportAs |
 | `pipe.spec.ts` | 2 | Pure and impure |

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { compileCode as compile } from './test-helpers';
-import { expectCompiles } from './test-helpers';
+import { compileCode as compile, expectCompiles } from './test-helpers';
+import { compile as rawCompile } from './compile';
 
 describe('@Component', () => {
   it('compiles a component with template and styles', () => {
@@ -715,6 +715,61 @@ describe('@Component', () => {
       expectCompiles(result);
       expect(result).toContain('ɵcmp');
       expect(result).toContain('decls: 0');
+    });
+
+    it('returns templateUrl as resource dependency', () => {
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-dep-tpl',
+          templateUrl: './__fixtures__/test.component.html'
+        })
+        export class DepTplComponent {}
+      `, __filename);
+
+      expect(result.resourceDependencies).toHaveLength(1);
+      expect(result.resourceDependencies[0]).toContain('test.component.html');
+    });
+
+    it('returns styleUrls as resource dependencies', () => {
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-dep-style',
+          template: '<p>hi</p>',
+          styleUrls: ['./__fixtures__/test.component.css']
+        })
+        export class DepStyleComponent {}
+      `, __filename);
+
+      expect(result.resourceDependencies).toHaveLength(1);
+      expect(result.resourceDependencies[0]).toContain('test.component.css');
+    });
+
+    it('returns both template and style as resource dependencies', () => {
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-dep-both',
+          templateUrl: './__fixtures__/test.component.html',
+          styleUrl: './__fixtures__/test.component.css'
+        })
+        export class DepBothComponent {}
+      `, __filename);
+
+      expect(result.resourceDependencies).toHaveLength(2);
+      expect(result.resourceDependencies[0]).toContain('test.component.html');
+      expect(result.resourceDependencies[1]).toContain('test.component.css');
+    });
+
+    it('returns empty resource dependencies for inline templates', () => {
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({ selector: 'app-inline', template: '<p>hi</p>' })
+        export class InlineComponent {}
+      `, 'inline.ts');
+
+      expect(result.resourceDependencies).toHaveLength(0);
     });
 
     it('compiles component using inject()', () => {
