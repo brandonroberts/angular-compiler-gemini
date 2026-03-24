@@ -63,50 +63,17 @@ describe('JIT Transform', () => {
     });
   });
 
-  describe('Factory Emission', () => {
-    it('emits ɵfac for components', () => {
+  describe('No Static Metadata', () => {
+    it('does NOT emit ɵfac', () => {
       const result = transform(`
         import { Component } from '@angular/core';
         @Component({ selector: 'x', template: '' })
         export class X {}
       `);
 
-      expect(result).toContain('ɵfac');
-      expect(result).toContain('new (__ngFactoryType__ || X)()');
+      expect(result).not.toContain('ɵfac');
     });
 
-    it('emits ɵfac for directives', () => {
-      const result = transform(`
-        import { Directive } from '@angular/core';
-        @Directive({ selector: '[x]' })
-        export class X {}
-      `);
-
-      expect(result).toContain('ɵfac');
-    });
-
-    it('emits ɵfac for pipes', () => {
-      const result = transform(`
-        import { Pipe } from '@angular/core';
-        @Pipe({ name: 'x' })
-        export class X { transform(v: any) { return v; } }
-      `);
-
-      expect(result).toContain('ɵfac');
-    });
-
-    it('emits ɵfac for injectables', () => {
-      const result = transform(`
-        import { Injectable } from '@angular/core';
-        @Injectable()
-        export class X {}
-      `);
-
-      expect(result).toContain('ɵfac');
-    });
-  });
-
-  describe('No Template Compilation', () => {
     it('does NOT emit ɵcmp', () => {
       const result = transform(`
         import { Component } from '@angular/core';
@@ -118,7 +85,6 @@ describe('JIT Transform', () => {
       expect(result).not.toContain('ɵɵdefineComponent');
       expect(result).not.toContain('ɵɵelementStart');
       expect(result).not.toContain('ɵɵdomElementStart');
-      expect(result).not.toContain('ɵɵtextInterpolate');
     });
 
     it('does NOT emit ɵdir', () => {
@@ -142,109 +108,68 @@ describe('JIT Transform', () => {
       expect(result).not.toContain('ɵpipe');
       expect(result).not.toContain('ɵɵdefinePipe');
     });
-  });
 
-  describe('Signal Metadata', () => {
-    it('emits ɵsignals for signal inputs', () => {
+    it('does NOT emit ɵprov', () => {
       const result = transform(`
-        import { Component, input } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export class X {
-          name = input<string>();
-          id = input.required<number>();
-        }
+        import { Injectable } from '@angular/core';
+        @Injectable({ providedIn: 'root' })
+        export class X {}
       `);
 
-      expect(result).toContain('ɵsignals');
-      expect(result).toContain('inputs');
-      expect(result).toContain('name');
-      expect(result).toContain('id');
-      // Required flag
-      expect(result).toContain('required: true');
-      expect(result).toContain('required: false');
+      expect(result).not.toContain('ɵprov');
     });
 
-    it('emits ɵsignals for model signals', () => {
+    it('does NOT emit ɵsignals', () => {
       const result = transform(`
-        import { Component, model } from '@angular/core';
+        import { Component, input, model, output } from '@angular/core';
         @Component({ selector: 'x', template: '' })
         export class X {
-          value = model(0);
-        }
-      `);
-
-      expect(result).toContain('ɵsignals');
-      expect(result).toContain('models');
-      expect(result).toContain('"value"');
-    });
-
-    it('emits ɵsignals for signal outputs', () => {
-      const result = transform(`
-        import { Component, output } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export class X {
-          clicked = output<void>();
-        }
-      `);
-
-      expect(result).toContain('ɵsignals');
-      expect(result).toContain('outputs');
-      expect(result).toContain('"clicked"');
-    });
-
-    it('emits ɵsignals for signal queries', () => {
-      const result = transform(`
-        import { Component, viewChild, contentChildren } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export class X {
-          myRef = viewChild('ref');
-          items = contentChildren('item');
-        }
-      `);
-
-      expect(result).toContain('ɵsignals');
-      expect(result).toContain('queries');
-      expect(result).toContain('myRef');
-      expect(result).toContain('"view"');
-      expect(result).toContain('items');
-      expect(result).toContain('"content"');
-    });
-
-    it('does NOT emit ɵsignals when no signal APIs are used', () => {
-      const result = transform(`
-        import { Component } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export class X {
-          count = 0;
-          increment() { this.count++; }
+          name = input('');
+          count = model(0);
+          clicked = output();
         }
       `);
 
       expect(result).not.toContain('ɵsignals');
     });
 
-    it('emits all signal types together', () => {
+    it('does NOT inject i0 import', () => {
       const result = transform(`
-        import { Component, input, model, output, viewChild } from '@angular/core';
+        import { Component } from '@angular/core';
         @Component({ selector: 'x', template: '' })
-        export class X {
-          name = input('default');
-          count = model(0);
-          clicked = output<void>();
-          myRef = viewChild('ref');
-        }
+        export class X {}
       `);
 
-      expect(result).toContain('ɵsignals');
-      expect(result).toContain('inputs');
-      expect(result).toContain('models');
-      expect(result).toContain('outputs');
-      expect(result).toContain('queries');
+      expect(result).not.toContain('import * as i0');
     });
   });
 
-  describe('Edge Cases', () => {
-    it('skips non-Angular decorators', () => {
+  describe('Code Preservation', () => {
+    it('preserves class members', () => {
+      const result = transform(`
+        import { Component, signal } from '@angular/core';
+        @Component({ selector: 'x', template: '' })
+        export class X {
+          count = signal(0);
+          increment() { this.count.update(c => c + 1); }
+        }
+      `);
+
+      expect(result).toContain('count = signal(0)');
+      expect(result).toContain('increment()');
+    });
+
+    it('preserves imports', () => {
+      const result = transform(`
+        import { Component, signal, input } from '@angular/core';
+        @Component({ selector: 'x', template: '' })
+        export class X { name = input(''); }
+      `);
+
+      expect(result).toContain("import { Component, signal, input } from '@angular/core'");
+    });
+
+    it('preserves non-Angular decorators', () => {
       const result = transform(`
         import { SomeDecorator } from 'somewhere';
         @SomeDecorator()
@@ -252,38 +177,17 @@ describe('JIT Transform', () => {
       `);
 
       expect(result).toContain('@SomeDecorator');
-      expect(result).not.toContain('ɵfac');
     });
 
-    it('handles class without decorators', () => {
-      const result = transform(`
-        export class PlainClass { value = 42; }
-      `);
-
-      expect(result).toContain('PlainClass');
-      expect(result).not.toContain('ɵfac');
-    });
-
-    it('handles default export', () => {
+    it('preserves default exports', () => {
       const result = transform(`
         import { Component } from '@angular/core';
         @Component({ selector: 'x', template: '' })
         export default class MyPage {}
       `);
 
+      expect(result).toContain('export default class');
       expect(result).toContain('@Component');
-      expect(result).toContain('ɵfac');
-      expect(result).toContain('export default');
-    });
-
-    it('injects i0 import', () => {
-      const result = transform(`
-        import { Component } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export class X {}
-      `);
-
-      expect(result).toContain('import * as i0 from "@angular/core"');
     });
   });
 });
