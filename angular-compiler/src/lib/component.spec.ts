@@ -109,6 +109,43 @@ describe('@Component', () => {
       expect(result).toContain('ɵɵdomListener');
     });
 
+    it('detects model() and model.required()', () => {
+      const result = compile(`
+        import { Component, model } from '@angular/core';
+        @Component({ selector: 'app-model-req', template: '{{ a() }} {{ b() }}' })
+        export class ModelReqComponent {
+          a = model(0);
+          b = model.required<string>();
+        }
+      `, 'model-req.ts');
+
+      expectCompiles(result);
+      // Both produce signal input descriptors
+      expect(result).toContain('a: [');
+      expect(result).toContain('b: [');
+      // Both generate Change outputs
+      expect(result).toContain('aChange: "aChange"');
+      expect(result).toContain('bChange: "bChange"');
+    });
+
+    it('detects viewChild.required() and contentChild.required()', () => {
+      const result = compile(`
+        import { Component, viewChild, contentChild } from '@angular/core';
+        @Component({
+          selector: 'app-req-queries',
+          template: '<input #myRef /><ng-content></ng-content>'
+        })
+        export class ReqQueryComponent {
+          myRef = viewChild.required('myRef');
+          header = contentChild.required('header');
+        }
+      `, 'req-queries.ts');
+
+      expectCompiles(result);
+      expect(result).toContain('ɵɵviewQuery');
+      expect(result).toContain('ɵɵcontentQuery');
+    });
+
     it('compiles computed and signal', () => {
       const result = compile(`
         import { Component, signal, computed } from '@angular/core';

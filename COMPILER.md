@@ -84,11 +84,13 @@ The compiler is split into two phases:
 |---|---|
 | `signal()` | Yes (preserved as-is) |
 | `computed()` | Yes (preserved as-is) |
-| `input()` / `input.required()` | Yes (signal input descriptors) |
-| `model()` | Yes (generates input + `Change` output) |
+| `input()` / `input.required()` | Yes (signal input descriptors with required flag) |
+| `model()` / `model.required()` | Yes (generates input + `Change` output) |
 | `output()` | Yes |
-| `viewChild()` / `viewChildren()` | Yes (signal queries) |
-| `contentChild()` / `contentChildren()` | Yes (signal queries) |
+| `viewChild()` / `viewChild.required()` | Yes (signal queries) |
+| `viewChildren()` | Yes (signal queries) |
+| `contentChild()` / `contentChild.required()` | Yes (signal queries) |
+| `contentChildren()` | Yes (signal queries) |
 | `inject()` | Yes (preserved as-is) |
 
 ### Template Features
@@ -126,7 +128,7 @@ The compiler is split into two phases:
 
 | Feature | Reason |
 |---|---|
-| Template type checking | Requires full `ts.Program`; use Angular Language Service in IDE |
+| Template type checking | Requires full `ts.Program`; use Angular Language Service in IDE. Note: `required` input validation is a compile-time check in ngtsc — this compiler detects the `required` flag but does not enforce it at compile time |
 | i18n / localization | Out of scope (future consideration) |
 | Source maps | Out of scope |
 | `@defer` lazy dependency loading | Requires global analysis of which imports are defer-only |
@@ -235,11 +237,11 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-107 tests across 11 spec files:
+109 tests across 11 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
-| `component.spec.ts` | 37 | All @Component features, signals, control flow, defer, pipes, content projection, external resources |
+| `component.spec.ts` | 39 | All @Component features, signals (including required variants), control flow, defer, pipes, content projection, external resources, providers |
 | `ast-translator.spec.ts` | 42 | Every AST visitor method (expressions + statements) |
 | `directive.spec.ts` | 2 | Host bindings, exportAs |
 | `pipe.spec.ts` | 2 | Pure and impure |

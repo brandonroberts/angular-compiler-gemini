@@ -189,11 +189,13 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
 
                 // Handle Signal/Model inputs
                 for (const [key, val] of Object.entries(sigs.inputs)) {
-                  // For Signal inputs, Ivy expects a descriptor object
+                  const sigDesc = val as any;
                   ivyInputs[key] = {
                     classPropertyName: key,
                     bindingPropertyName: key,
-                    isSignal: true
+                    isSignal: true,
+                    required: sigDesc.required || false,
+                    transformFunction: sigDesc.transform || null,
                   };
                 }
                 if (parsedTemplate.errors) {
