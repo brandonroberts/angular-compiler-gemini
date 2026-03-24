@@ -376,7 +376,7 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
   if (!dec) return null;
   const call = dec.expression as ts.CallExpression;
   const obj = call.arguments[0] as ts.ObjectLiteralExpression;
-  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, styles: [], templateUrl: null, styleUrls: [] };
+  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, selector: null, styles: [], templateUrl: null, styleUrls: [] };
   if (!obj) return meta;
   obj.properties.forEach(p => {
     if (!ts.isPropertyAssignment(p)) return;
