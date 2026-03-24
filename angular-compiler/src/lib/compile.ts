@@ -205,9 +205,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   defer: {
                     mode: 0,
                     blocks: new Map(
-                      parsedTemplate.nodes
-                        .filter((n: any) => n.constructor.name === 'DeferredBlock')
-                        .map((n: any) => [n, null])
+                      collectDeferBlocks(parsedTemplate.nodes).map((n: any) => [n, null])
                     )
                   },
                   declarationListEmitMode: 0, // Direct
@@ -465,6 +463,32 @@ function detectSignals(node: ts.ClassDeclaration) {
   });
 
   return { inputs, outputs, viewQueries, contentQueries };
+}
+
+/** Recursively collect all DeferredBlock nodes from a template AST. */
+function collectDeferBlocks(nodes: any[]): any[] {
+  const result: any[] = [];
+  function walk(node: any) {
+    if (!node) return;
+    if (node.constructor?.name === 'DeferredBlock') {
+      result.push(node);
+    }
+    // Walk all possible child structures across block types:
+    // Element/Template: children
+    // IfBlock: branches (each has children)
+    // ForLoopBlock: children, empty (has children)
+    // SwitchBlock: cases (each has children)
+    // DeferredBlock: children, placeholder/loading/error (each has children)
+    if (Array.isArray(node.children)) node.children.forEach(walk);
+    if (Array.isArray(node.branches)) node.branches.forEach(walk);
+    if (Array.isArray(node.cases)) node.cases.forEach(walk);
+    if (node.empty?.children) node.empty.children.forEach(walk);
+    if (node.placeholder?.children) node.placeholder.children.forEach(walk);
+    if (node.loading?.children) node.loading.children.forEach(walk);
+    if (node.error?.children) node.error.children.forEach(walk);
+  }
+  nodes.forEach(walk);
+  return result;
 }
 
 function injectAngularImport(sf: ts.SourceFile) { return ts.factory.updateSourceFile(sf, [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamespaceImport(ts.factory.createIdentifier('i0'))), ts.factory.createStringLiteral('@angular/core')), ...sf.statements]); }
