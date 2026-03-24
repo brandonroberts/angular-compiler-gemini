@@ -42,6 +42,19 @@ describe('@Component', () => {
     expect(fullResult.map.sources).toContain('hello.ts');
     expect(fullResult.map.sourcesContent).toBeDefined();
     expect(fullResult.map.mappings).toBeTruthy();
+    // Source map preserves original code positions (surgical edits, not full rewrite)
+    const origLines = `
+      import { Component, signal } from '@angular/core';
+      @Component({ selector: 'app-hello', template: '<h1>Hello</h1>' })
+      export class HelloComponent { title = signal('World'); }
+    `.split('\n');
+    const outLines = fullResult.code.split('\n');
+    // Class body should appear in output (preserved by MagicString)
+    expect(fullResult.code).toContain("title = signal('World')");
+    // Decorator should be removed
+    expect(fullResult.code).not.toMatch(/@Component/);
+    // i0 import prepended
+    expect(outLines[0]).toContain('import * as i0');
     // Template function emitted
     expect(result).toMatch(/template:\s*\(rf, ctx\)/);
     // Text interpolation instruction

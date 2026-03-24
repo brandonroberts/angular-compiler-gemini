@@ -154,10 +154,21 @@ The compiler is split into two phases:
 |---|---|
 | Template type checking | Requires full `ts.Program`; use Angular Language Service in IDE. Note: `required` input validation is a compile-time check in ngtsc — this compiler detects the `required` flag but does not enforce it at compile time |
 | i18n / localization | Out of scope (future consideration) |
-| Source maps | Out of scope |
-| `@defer` lazy dependency loading | Requires global analysis of which imports are defer-only |
 | Partial / linker compilation | Handled by separate plugin |
-| HMR (hot module replacement) | Requires `ngtsc` HMR tracking metadata; falls back to page reload |
+
+### HMR (Hot Module Replacement)
+
+Leaf components support true HMR via Angular's `ɵɵreplaceMetadata`. When a component file changes in dev mode:
+
+1. Vite hot-replaces the module
+2. The `import.meta.hot.accept` callback calls `ɵɵreplaceMetadata` with the new component definition
+3. Angular merges old/new definitions and recreates matching LViews without page reload
+
+Root components (e.g. `App`) fall back to page reload since they can't be hot-replaced without re-bootstrapping the application. Non-Angular files use Vite's default HMR.
+
+### Source Maps
+
+The compiler generates V3 source maps via `magic-string` that map the compiled output back to the original TypeScript source. The source map is passed through Vite's transform pipeline which composes it with other transforms (esbuild type stripping, etc.) for end-to-end mapping in browser devtools.
 
 ### Style Preprocessing
 
