@@ -1,6 +1,44 @@
 import * as o from '@angular/compiler';
 import * as ts from 'typescript';
 
+const BINARY_OP_MAP: Record<o.BinaryOperator, ts.BinaryOperator> = {
+	[o.BinaryOperator.Equals]: ts.SyntaxKind.EqualsEqualsToken,
+	[o.BinaryOperator.NotEquals]: ts.SyntaxKind.ExclamationEqualsToken,
+	[o.BinaryOperator.Assign]: ts.SyntaxKind.EqualsToken,
+	[o.BinaryOperator.Identical]: ts.SyntaxKind.EqualsEqualsEqualsToken,
+	[o.BinaryOperator.NotIdentical]: ts.SyntaxKind.ExclamationEqualsEqualsToken,
+	[o.BinaryOperator.Minus]: ts.SyntaxKind.MinusToken,
+	[o.BinaryOperator.Plus]: ts.SyntaxKind.PlusToken,
+	[o.BinaryOperator.Divide]: ts.SyntaxKind.SlashToken,
+	[o.BinaryOperator.Multiply]: ts.SyntaxKind.AsteriskToken,
+	[o.BinaryOperator.Modulo]: ts.SyntaxKind.PercentToken,
+	[o.BinaryOperator.And]: ts.SyntaxKind.AmpersandAmpersandToken,
+	[o.BinaryOperator.Or]: ts.SyntaxKind.BarBarToken,
+	[o.BinaryOperator.BitwiseOr]: ts.SyntaxKind.BarToken,
+	[o.BinaryOperator.BitwiseAnd]: ts.SyntaxKind.AmpersandToken,
+	[o.BinaryOperator.Lower]: ts.SyntaxKind.LessThanToken,
+	[o.BinaryOperator.LowerEquals]: ts.SyntaxKind.LessThanEqualsToken,
+	[o.BinaryOperator.Bigger]: ts.SyntaxKind.GreaterThanToken,
+	[o.BinaryOperator.BiggerEquals]: ts.SyntaxKind.GreaterThanEqualsToken,
+	[o.BinaryOperator.NullishCoalesce]: ts.SyntaxKind.QuestionQuestionToken,
+	[o.BinaryOperator.Exponentiation]: ts.SyntaxKind.AsteriskAsteriskToken,
+	[o.BinaryOperator.In]: ts.SyntaxKind.InKeyword,
+	[o.BinaryOperator.AdditionAssignment]: ts.SyntaxKind.PlusEqualsToken,
+	[o.BinaryOperator.SubtractionAssignment]: ts.SyntaxKind.MinusEqualsToken,
+	[o.BinaryOperator.MultiplicationAssignment]: ts.SyntaxKind.AsteriskEqualsToken,
+	[o.BinaryOperator.DivisionAssignment]: ts.SyntaxKind.SlashEqualsToken,
+	[o.BinaryOperator.RemainderAssignment]: ts.SyntaxKind.PercentEqualsToken,
+	[o.BinaryOperator.ExponentiationAssignment]: ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+	[o.BinaryOperator.AndAssignment]: ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+	[o.BinaryOperator.OrAssignment]: ts.SyntaxKind.BarBarEqualsToken,
+	[o.BinaryOperator.NullishCoalesceAssignment]: ts.SyntaxKind.QuestionQuestionEqualsToken,
+};
+
+const UNARY_OP_MAP: Record<number, ts.PrefixUnaryOperator> = {
+	[o.UnaryOperator.Minus]: ts.SyntaxKind.MinusToken,
+	[o.UnaryOperator.Plus]: ts.SyntaxKind.PlusToken,
+};
+
 export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	// --- Non-exported or Version-Specific Expression Methods ---
 
@@ -20,6 +58,14 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 			),
 			undefined,
 			ast.args.map((a: any) => a.visitExpression(this, context))
+		);
+	}
+
+	visitWriteVarExpr(ast: any, context: any) {
+		return ts.factory.createBinaryExpression(
+			ts.factory.createIdentifier(ast.name),
+			ts.SyntaxKind.EqualsToken,
+			ast.value.visitExpression(this, context)
 		);
 	}
 
@@ -58,6 +104,8 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 
 	// Support Defer dependency tracking variables
 	visitReadVarExpr(ast: o.ReadVarExpr, context: any) {
+		if (ast.name === 'this') return ts.factory.createThis();
+		if (ast.name === 'super') return ts.factory.createSuper();
 		return ts.factory.createIdentifier(ast.name);
 	}
 
@@ -83,6 +131,7 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 			return ts.factory.createNumericLiteral(ast.value.toString());
 		}
 		if (typeof ast.value === 'boolean') return ast.value ? ts.factory.createTrue() : ts.factory.createFalse();
+		if (typeof ast.value === 'undefined') return ts.factory.createVoidExpression(ts.factory.createNumericLiteral('0'));
 		return ts.factory.createNull();
 	}
 
@@ -134,39 +183,11 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitBinaryOperatorExpr(ast: o.BinaryOperatorExpr, context: any) {
-		const opMap: Record<o.BinaryOperator, ts.BinaryOperator> = {
-			[o.BinaryOperator.Equals]: ts.SyntaxKind.EqualsEqualsToken,
-			[o.BinaryOperator.NotEquals]: ts.SyntaxKind.ExclamationEqualsToken,
-			[o.BinaryOperator.Assign]: ts.SyntaxKind.EqualsToken,
-			[o.BinaryOperator.Identical]: ts.SyntaxKind.EqualsEqualsEqualsToken,
-			[o.BinaryOperator.NotIdentical]: ts.SyntaxKind.ExclamationEqualsEqualsToken,
-			[o.BinaryOperator.Minus]: ts.SyntaxKind.MinusToken,
-			[o.BinaryOperator.Plus]: ts.SyntaxKind.PlusToken,
-			[o.BinaryOperator.Divide]: ts.SyntaxKind.SlashToken,
-			[o.BinaryOperator.Multiply]: ts.SyntaxKind.AsteriskToken,
-			[o.BinaryOperator.Modulo]: ts.SyntaxKind.PercentToken,
-			[o.BinaryOperator.And]: ts.SyntaxKind.AmpersandAmpersandToken,
-			[o.BinaryOperator.Or]: ts.SyntaxKind.BarBarToken,
-			[o.BinaryOperator.BitwiseOr]: ts.SyntaxKind.BarToken,
-			[o.BinaryOperator.BitwiseAnd]: ts.SyntaxKind.AmpersandToken,
-			[o.BinaryOperator.Lower]: ts.SyntaxKind.LessThanToken,
-			[o.BinaryOperator.LowerEquals]: ts.SyntaxKind.LessThanEqualsToken,
-			[o.BinaryOperator.Bigger]: ts.SyntaxKind.GreaterThanToken,
-			[o.BinaryOperator.BiggerEquals]: ts.SyntaxKind.GreaterThanEqualsToken,
-			[o.BinaryOperator.NullishCoalesce]: ts.SyntaxKind.QuestionQuestionToken,
-			[o.BinaryOperator.Exponentiation]: ts.SyntaxKind.AsteriskAsteriskToken,
-			[o.BinaryOperator.In]: ts.SyntaxKind.InKeyword,
-			[o.BinaryOperator.AdditionAssignment]: ts.SyntaxKind.PlusEqualsToken,
-			[o.BinaryOperator.SubtractionAssignment]: ts.SyntaxKind.MinusEqualsToken,
-			[o.BinaryOperator.MultiplicationAssignment]: ts.SyntaxKind.AsteriskEqualsToken,
-			[o.BinaryOperator.DivisionAssignment]: ts.SyntaxKind.SlashEqualsToken,
-			[o.BinaryOperator.RemainderAssignment]: ts.SyntaxKind.PercentEqualsToken,
-			[o.BinaryOperator.ExponentiationAssignment]: ts.SyntaxKind.AsteriskAsteriskEqualsToken,
-			[o.BinaryOperator.AndAssignment]: ts.SyntaxKind.AmpersandAmpersandEqualsToken,
-			[o.BinaryOperator.OrAssignment]: ts.SyntaxKind.BarBarEqualsToken,
-			[o.BinaryOperator.NullishCoalesceAssignment]: ts.SyntaxKind.QuestionQuestionEqualsToken,
-		};
-		return ts.factory.createBinaryExpression(ast.lhs.visitExpression(this, context), opMap[ast.operator] ?? ts.SyntaxKind.PlusToken, ast.rhs.visitExpression(this, context));
+		const op = BINARY_OP_MAP[ast.operator];
+		if (op === undefined) {
+			throw new Error(`Unsupported binary operator: ${ast.operator}`);
+		}
+		return ts.factory.createBinaryExpression(ast.lhs.visitExpression(this, context), op, ast.rhs.visitExpression(this, context));
 	}
 
 	visitConditionalExpr(ast: o.ConditionalExpr, context: any) {
@@ -182,8 +203,11 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitUnaryOperatorExpr(ast: o.UnaryOperatorExpr, context: any) {
-		const ops = { [o.UnaryOperator.Minus]: ts.SyntaxKind.MinusToken, [o.UnaryOperator.Plus]: ts.SyntaxKind.PlusToken };
-		return ts.factory.createPrefixUnaryExpression(ops[ast.operator] ?? ts.SyntaxKind.PlusToken, ast.expr.visitExpression(this, context));
+		const op = UNARY_OP_MAP[ast.operator];
+		if (op === undefined) {
+			throw new Error(`Unsupported unary operator: ${ast.operator}`);
+		}
+		return ts.factory.createPrefixUnaryExpression(op, ast.expr.visitExpression(this, context));
 	}
 
 	visitFunctionExpr(ast: o.FunctionExpr, context: any) {
@@ -191,7 +215,13 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitArrowFunctionExpr(ast: o.ArrowFunctionExpr, context: any) {
-		return ts.factory.createArrowFunction(undefined, undefined, ast.params.map(p => ts.factory.createParameterDeclaration(undefined, undefined, p.name)), undefined, ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken), ast.body.visitExpression(this, context));
+		const params = ast.params.map(p => ts.factory.createParameterDeclaration(undefined, undefined, p.name));
+		const arrow = ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken);
+		// ArrowFunctionExpr body can be a single Expression or an array of Statements
+		const body = Array.isArray(ast.body)
+			? ts.factory.createBlock(ast.body.map(s => s.visitStatement(this, context)), true)
+			: ast.body.visitExpression(this, context);
+		return ts.factory.createArrowFunction(undefined, undefined, params, undefined, arrow, body);
 	}
 
 	visitDynamicImportExpr(ast: o.DynamicImportExpr, context: any) {
@@ -229,6 +259,10 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitExternalExpr(ast: o.ExternalExpr, context: any) {
+		const moduleName = ast.value.moduleName;
+		if (moduleName && moduleName !== '@angular/core') {
+			throw new Error(`Unsupported external module reference: ${moduleName}.${ast.value.name}`);
+		}
 		return ts.factory.createPropertyAccessExpression(ts.factory.createIdentifier('i0'), ts.factory.createIdentifier(ast.value.name!));
 	}
 
