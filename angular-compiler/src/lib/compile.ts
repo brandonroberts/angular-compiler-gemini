@@ -105,12 +105,14 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
             const decoratorName = (dec.expression as ts.CallExpression).expression.getText();
             const meta = extractMetadata(dec);
             const sigs = detectSignals(node);
+            const fields = detectFieldDecorators(node);
             const hostBindings = parseHostBindings(meta.hostRaw || {});
 
+            // Merge host decorator bindings with host config object
             const hostMetadata: o.R3HostMetadata = {
               attributes: hostBindings.attributes,
-              listeners: hostBindings.listeners,
-              properties: hostBindings.properties,
+              listeners: { ...hostBindings.listeners, ...fields.hostListeners },
+              properties: { ...hostBindings.properties, ...fields.hostProperties },
               specialAttributes: hostBindings.specialAttributes
             };
 
@@ -190,17 +192,20 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
 
                 const parsedTemplate = parseTemplate(templateContent, fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
-                // 1. Map Signal Inputs to Ivy Descriptors
+                // Merge inputs: decorator config < @Input field decorators < signal inputs
                 const ivyInputs: Record<string, any> = {};
 
-                // Handle Decorator inputs (from @Component({ inputs: [...] }))
+                // Handle config inputs (from @Component({ inputs: [...] }))
                 if (Array.isArray(meta.inputs)) {
                   meta.inputs.forEach((i: string) => ivyInputs[i] = i);
                 } else if (meta.inputs) {
                   Object.assign(ivyInputs, meta.inputs);
                 }
 
-                // Handle Signal/Model inputs
+                // Handle @Input() field decorators
+                Object.assign(ivyInputs, fields.inputs);
+
+                // Handle Signal/Model inputs (take precedence)
                 for (const [key, val] of Object.entries(sigs.inputs)) {
                   const sigDesc = val as any;
                   ivyInputs[key] = {
@@ -229,9 +234,9 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   },
                   styles: meta.styles,
                   inputs: ivyInputs,
-                  outputs: { ...meta.outputs, ...sigs.outputs },
-                  viewQueries: sigs.viewQueries,
-                  queries: sigs.contentQueries,
+                  outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
+                  viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
+                  queries: [...fields.contentQueries, ...sigs.contentQueries],
                   host: hostMetadata,
                   changeDetection: meta.changeDetection,
                   encapsulation: meta.encapsulation,
@@ -266,10 +271,10 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                 targetType = FactoryTarget.Directive;
                 const dir = compileDirectiveFromMetadata({
                   ...meta, name: className, type: classRef, typeSourceSpan, host: hostMetadata,
-                  inputs: { ...meta.inputs, ...sigs.inputs },
-                  outputs: { ...meta.outputs, ...sigs.outputs },
-                  viewQueries: sigs.viewQueries,
-                  queries: sigs.contentQueries,
+                  inputs: { ...meta.inputs, ...fields.inputs, ...sigs.inputs },
+                  outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
+                  viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
+                  queries: [...fields.contentQueries, ...sigs.contentQueries],
                   providers: meta.providers, exportAs: meta.exportAs, isStandalone: meta.standalone,
                   lifecycle: { usesOnChanges: false },
                 }, constantPool, bindingParser);
@@ -504,6 +509,138 @@ function detectSignals(node: ts.ClassDeclaration) {
   });
 
   return { inputs, outputs, viewQueries, contentQueries };
+}
+
+/**
+ * Detect decorator-based field metadata: @Input, @Output, @ViewChild,
+ * @ContentChild, @ViewChildren, @ContentChildren, @HostBinding, @HostListener.
+ */
+function detectFieldDecorators(node: ts.ClassDeclaration) {
+  const inputs: any = {};
+  const outputs: any = {};
+  const viewQueries: any[] = [];
+  const contentQueries: any[] = [];
+  const hostProperties: Record<string, string> = {};
+  const hostListeners: Record<string, string> = {};
+
+  for (const member of node.members) {
+    const decorators = ts.getDecorators(member);
+    if (!decorators) continue;
+
+    const memberName = member.name?.getText() || '';
+
+    for (const dec of decorators) {
+      if (!ts.isCallExpression(dec.expression)) continue;
+      const decName = dec.expression.expression.getText();
+      const args = dec.expression.arguments;
+
+      switch (decName) {
+        case 'Input': {
+          let bindingName = memberName;
+          let required = false;
+          let transformFunction: any = null;
+
+          if (args.length > 0) {
+            const arg = args[0];
+            if (ts.isStringLiteral(arg)) {
+              bindingName = arg.text;
+            } else if (ts.isObjectLiteralExpression(arg)) {
+              for (const prop of arg.properties) {
+                if (!ts.isPropertyAssignment(prop)) continue;
+                const key = prop.name.getText();
+                if (key === 'alias' && ts.isStringLiteral(prop.initializer)) bindingName = prop.initializer.text;
+                if (key === 'required') required = prop.initializer.getText() === 'true';
+                if (key === 'transform') transformFunction = new o.WrappedNodeExpr(prop.initializer);
+              }
+            }
+          }
+
+          inputs[memberName] = {
+            classPropertyName: memberName,
+            bindingPropertyName: bindingName,
+            isSignal: false,
+            required,
+            transformFunction,
+          };
+          break;
+        }
+
+        case 'Output': {
+          const alias = args.length > 0 && ts.isStringLiteral(args[0]) ? args[0].text : memberName;
+          outputs[memberName] = alias;
+          break;
+        }
+
+        case 'ViewChild': case 'ViewChildren': case 'ContentChild': case 'ContentChildren': {
+          const isView = decName.startsWith('View');
+          const isFirst = decName === 'ViewChild' || decName === 'ContentChild';
+
+          let predicate: any = memberName;
+          if (args.length > 0) {
+            const pred = args[0];
+            if (ts.isStringLiteral(pred)) {
+              predicate = [pred.text];
+            } else {
+              predicate = new o.WrappedNodeExpr(unwrapForwardRef(pred as ts.Expression));
+            }
+          }
+
+          let read: any = null;
+          let isStatic = false;
+          let descendants = isView || isFirst; // ContentChildren defaults to false
+
+          if (args.length > 1 && ts.isObjectLiteralExpression(args[1])) {
+            for (const prop of (args[1] as ts.ObjectLiteralExpression).properties) {
+              if (!ts.isPropertyAssignment(prop)) continue;
+              const key = prop.name.getText();
+              if (key === 'read') read = new o.WrappedNodeExpr(prop.initializer);
+              if (key === 'static') isStatic = prop.initializer.getText() === 'true';
+              if (key === 'descendants') descendants = prop.initializer.getText() === 'true';
+            }
+          }
+
+          const query = {
+            propertyName: memberName,
+            predicate,
+            first: isFirst,
+            descendants,
+            read,
+            static: isStatic,
+            emitFlags: 0,
+            isSignal: false,
+          };
+
+          if (isView) viewQueries.push(query);
+          else contentQueries.push(query);
+          break;
+        }
+
+        case 'HostBinding': {
+          const target = args.length > 0 && ts.isStringLiteral(args[0]) ? args[0].text : memberName;
+          hostProperties[target] = memberName;
+          break;
+        }
+
+        case 'HostListener': {
+          if (args.length > 0 && ts.isStringLiteral(args[0])) {
+            const event = args[0].text;
+            let handler = `${memberName}()`;
+            if (args.length > 1 && ts.isArrayLiteralExpression(args[1])) {
+              const handlerArgs = args[1].elements
+                .filter(ts.isStringLiteral)
+                .map(e => e.text)
+                .join(', ');
+              handler = `${memberName}(${handlerArgs})`;
+            }
+            hostListeners[event] = handler;
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return { inputs, outputs, viewQueries, contentQueries, hostProperties, hostListeners };
 }
 
 /** Recursively collect all DeferredBlock nodes from a template AST. */
