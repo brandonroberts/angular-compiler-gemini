@@ -77,6 +77,23 @@ describe('Error Handling', () => {
     expect(result).toContain('ng-component-routedpage');
   });
 
+  it('unwraps forwardRef in imports', () => {
+    const result = compile(`
+      import { Component, forwardRef } from '@angular/core';
+      class LazyComponent {}
+      @Component({
+        selector: 'app-fwd',
+        template: '',
+        imports: [forwardRef(() => LazyComponent)]
+      })
+      export class FwdComponent {}
+    `, 'fwd.ts');
+
+    expect(result).toContain('ɵcmp');
+    // The forwardRef should be unwrapped — LazyComponent in dependencies, not forwardRef call
+    expect(result).toContain('LazyComponent');
+  });
+
   it('component with invalid template returns empty', () => {
     // Unclosed tags should trigger parse errors
     const result = compile(`

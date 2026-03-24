@@ -429,7 +429,7 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
           meta.styles = [valNode.text];
         }
         break;
-      case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': case 'declarations': case 'exports': case 'bootstrap': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
+      case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': case 'declarations': case 'exports': case 'bootstrap': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(unwrapForwardRef(e as ts.Expression))); break;
       default: meta[key] = valText.replace(/['"`]/g, '');
     }
   });
@@ -530,6 +530,30 @@ function collectDeferBlocks(nodes: any[]): any[] {
   }
   nodes.forEach(walk);
   return result;
+}
+
+/**
+ * Unwrap forwardRef(() => X) to X. Returns the original node if not a forwardRef call.
+ */
+function unwrapForwardRef(node: ts.Expression): ts.Expression {
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'forwardRef') {
+    const arg = node.arguments[0];
+    if (arg && ts.isArrowFunction(arg)) {
+      if (ts.isBlock(arg.body)) {
+        // forwardRef(function() { return X; }) or forwardRef(() => { return X; })
+        const stmt = arg.body.statements[0];
+        if (stmt && ts.isReturnStatement(stmt) && stmt.expression) return stmt.expression;
+      } else {
+        // forwardRef(() => X)
+        return arg.body;
+      }
+    }
+    if (arg && ts.isFunctionExpression(arg) && arg.body.statements.length === 1) {
+      const stmt = arg.body.statements[0];
+      if (ts.isReturnStatement(stmt) && stmt.expression) return stmt.expression;
+    }
+  }
+  return node;
 }
 
 function injectAngularImport(sf: ts.SourceFile) { return ts.factory.updateSourceFile(sf, [ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, undefined, ts.factory.createNamespaceImport(ts.factory.createIdentifier('i0'))), ts.factory.createStringLiteral('@angular/core')), ...sf.statements]); }
