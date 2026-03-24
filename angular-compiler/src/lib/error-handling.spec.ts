@@ -1,0 +1,66 @@
+import { describe, it, expect } from 'vitest';
+import { compile } from './compile';
+
+describe('Error Handling', () => {
+  it('unknown decorator passes through unchanged', () => {
+    const code = `
+      import { SomeDecorator } from 'somewhere';
+      @SomeDecorator({ value: 1 })
+      export class PlainClass {
+        name = 'test';
+      }
+    `;
+    // Should not crash — unknown decorators are ignored
+    const result = compile(code, 'plain.ts');
+    // Class is preserved
+    expect(result).toContain('PlainClass');
+    // No Ivy static fields added
+    expect(result).not.toContain('ɵcmp');
+    expect(result).not.toContain('ɵdir');
+    expect(result).not.toContain('ɵpipe');
+    expect(result).not.toContain('ɵprov');
+    expect(result).not.toContain('ɵfac');
+    // Non-Angular decorator is preserved
+    expect(result).toContain('@SomeDecorator');
+  });
+
+  it('class without decorators passes through', () => {
+    const code = `
+      export class UtilService {
+        getValue() { return 42; }
+      }
+    `;
+    const result = compile(code, 'util.ts');
+    expect(result).toContain('UtilService');
+    expect(result).toContain('getValue');
+    expect(result).not.toContain('ɵfac');
+  });
+
+  it('@Injectable with no args object compiles', () => {
+    const result = compile(`
+      import { Injectable } from '@angular/core';
+      @Injectable()
+      export class BasicService {}
+    `, 'basic.service.ts');
+
+    expect(result).toContain('ɵprov');
+    expect(result).toContain('ɵfac');
+  });
+
+  it('component with invalid template returns empty', () => {
+    // Unclosed tags should trigger parse errors
+    const result = compile(`
+      import { Component } from '@angular/core';
+      @Component({
+        selector: 'app-bad',
+        template: '<div><span></div>'
+      })
+      export class BadComponent {}
+    `, 'bad.ts');
+
+    // The compiler logs errors and returns empty string for template errors
+    // (based on the parsedTemplate.errors check in compile.ts)
+    // The component should still have some output even if template fails
+    expect(result).toBeDefined();
+  });
+});

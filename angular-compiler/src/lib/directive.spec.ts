@@ -29,6 +29,15 @@ describe('@Directive', () => {
     expect(result).toContain('ɵdir');
     expect(result).toContain('ɵfac');
     expect(result).toContain('appHighlight');
+    // Decorator stripped
+    expect(result).not.toContain('@Directive');
+    // Host listeners emitted
+    expect(result).toContain('ɵɵlistener');
+    expect(result).toContain('mouseenter');
+    expect(result).toContain('mouseleave');
+    // Host style/class bindings emitted
+    expect(result).toContain('ɵɵstyleProp');
+    expect(result).toContain('ɵɵclassProp');
   });
 
   it('compiles directive with exportAs', () => {

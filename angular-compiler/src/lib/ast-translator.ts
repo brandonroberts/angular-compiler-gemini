@@ -245,7 +245,7 @@ export class AstTranslator implements o.ExpressionVisitor, o.StatementVisitor {
 	}
 
 	visitRegularExpressionLiteral(ast: o.RegularExpressionLiteralExpr, context: any) {
-		return ts.factory.createRegularExpressionLiteral(`/${ast.pattern}/${ast.flags}`);
+		return ts.factory.createRegularExpressionLiteral(`/${(ast as any).body ?? (ast as any).pattern}/${ast.flags}`);
 	}
 
 	visitTemplateLiteralElementExpr(ast: o.TemplateLiteralElementExpr, context: any) {

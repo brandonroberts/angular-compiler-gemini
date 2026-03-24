@@ -62,6 +62,16 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
           const decorators = ts.getDecorators(node);
           if (!decorators || decorators.length === 0) return ts.visitEachChild(node, visitor, context);
 
+          const ANGULAR_DECORATORS = ['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule'];
+          const angularDecorators = decorators.filter(dec => {
+            if (!ts.isCallExpression(dec.expression)) return false;
+            const name = dec.expression.expression.getText();
+            return ANGULAR_DECORATORS.includes(name);
+          });
+
+          // Skip classes that have no Angular decorators
+          if (angularDecorators.length === 0) return ts.visitEachChild(node, visitor, context);
+
           let ivyProps: ts.ClassElement[] = [];
           let targetType: FactoryTarget = FactoryTarget.Injectable;
 
@@ -71,7 +81,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
             type: new o.WrappedNodeExpr(classIdentifier)
           };
 
-          decorators.forEach(dec => {
+          angularDecorators.forEach(dec => {
             const decoratorName = (dec.expression as ts.CallExpression).expression.getText();
             const meta = extractMetadata(dec);
             const sigs = detectSignals(node);
@@ -285,9 +295,10 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
           });
           ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
 
+          const angularDecSet = new Set(angularDecorators);
           return ts.factory.updateClassDeclaration(
             node,
-            node.modifiers?.filter(m => !ts.isDecorator(m)),
+            node.modifiers?.filter(m => !ts.isDecorator(m) || !angularDecSet.has(m)),
             node.name,
             node.typeParameters,
             node.heritageClauses,
@@ -326,7 +337,8 @@ function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf:
 
 /** * METADATA & RESOURCE HELPERS
  */
-function extractMetadata(dec: ts.Decorator): any {
+function extractMetadata(dec: ts.Decorator | undefined): any {
+  if (!dec) return null;
   const call = dec.expression as ts.CallExpression;
   const obj = call.arguments[0] as ts.ObjectLiteralExpression;
   const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, styles: [], templateUrl: null, styleUrls: [] };
