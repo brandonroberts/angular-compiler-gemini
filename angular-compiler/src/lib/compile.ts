@@ -9,7 +9,10 @@ import {
   compileFactoryFunction,
   parseTemplate,
   makeBindingParser,
-  parseHostBindings
+  parseHostBindings,
+  ParseSourceFile,
+  ParseLocation,
+  ParseSourceSpan,
 } from '@angular/compiler';
 import { AstTranslator } from './ast-translator';
 import { ComponentRegistry } from './registry';
@@ -27,6 +30,9 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
+  const parseFile = new ParseSourceFile(sourceCode, fileName);
+  const parseLoc = new ParseLocation(parseFile, 0, 0, 0);
+  const typeSourceSpan = new ParseSourceSpan(parseLoc, parseLoc);
 
   // Inject 'import * as i0 from "@angular/core"'
   sourceFile = injectAngularImport(sourceFile);
@@ -132,13 +138,15 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   ...meta,
                   name: className,
                   type: classRef,
+                  typeSourceSpan,
                   declarations,
                   template: {
                     nodes: parsedTemplate.nodes,
                     ngContentSelectors: parsedTemplate.ngContentSelectors,
                     preserveWhitespaces: parsedTemplate.preserveWhitespaces
                   },
-                  styles: [...meta.styles.map((s: string) => new o.LiteralExpr(s)), ...res.styleSymbols.map(s => new o.ReadVarExpr(s))],
+                  styles: meta.styles,
+                  externalStyles: res.styleSymbols.map(s => new o.ReadVarExpr(s)),
                   inputs: ivyInputs,
                   outputs: { ...meta.outputs, ...sigs.outputs },
                   viewQueries: sigs.viewQueries,
@@ -156,7 +164,11 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   lifecycle: { usesOnChanges: false },
                   defer: {
                     mode: 0,
-                    blocks: parsedTemplate.nodes.filter((n: any) => n.constructor.name === 'DeferredBlock')
+                    blocks: new Map(
+                      parsedTemplate.nodes
+                        .filter((n: any) => n.constructor.name === 'DeferredBlock')
+                        .map((n: any) => [n, null])
+                    )
                   },
                   declarationListEmitMode: 0, // Direct
                   relativeContextFilePath: fileName,
@@ -173,11 +185,13 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
               case 'Directive':
                 targetType = FactoryTarget.Directive;
                 const dir = compileDirectiveFromMetadata({
-                  ...meta, name: className, type: classRef, host: hostMetadata,
+                  ...meta, name: className, type: classRef, typeSourceSpan, host: hostMetadata,
                   inputs: { ...meta.inputs, ...sigs.inputs },
                   outputs: { ...meta.outputs, ...sigs.outputs },
+                  viewQueries: sigs.viewQueries,
                   queries: sigs.contentQueries,
-                  providers: meta.providers, exportAs: meta.exportAs, isStandalone: meta.standalone
+                  providers: meta.providers, exportAs: meta.exportAs, isStandalone: meta.standalone,
+                  lifecycle: { usesOnChanges: false },
                 }, constantPool, bindingParser);
                 ivyProps.push(createStaticProperty('ɵdir', translateOutputAST(dir.expression)));
                 break;
@@ -186,7 +200,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                 targetType = FactoryTarget.Pipe;
                 const pipe = compilePipeFromMetadata({
                   ...meta, name: className, pipeName: meta.name, type: classRef,
-                  isStandalone: meta.standalone, pure: meta.pure !== false
+                  isStandalone: meta.standalone, pure: meta.pure ?? true
                 });
                 ivyProps.push(createStaticProperty('ɵpipe', translateOutputAST(pipe.expression)));
                 break;
@@ -270,6 +284,7 @@ function extractMetadata(dec: ts.Decorator): any {
       case 'changeDetection': meta.changeDetection = valText.includes('OnPush') ? 0 : 1; break;
       case 'encapsulation': meta.encapsulation = valText.includes('None') ? 2 : (valText.includes('ShadowDom') ? 3 : 0); break;
       case 'preserveWhitespaces': meta.preserveWhitespaces = valText === 'true'; break;
+      case 'pure': case 'standalone': meta[key] = valText !== 'false'; break;
       case 'exportAs': meta.exportAs = [valText.replace(/['"`]/g, '')]; break;
       case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
       case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
