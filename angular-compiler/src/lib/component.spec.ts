@@ -529,6 +529,67 @@ describe('@Component', () => {
       expect(result).toContain('encapsulation: 3');
     });
 
+    it('compiles component with providers', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        class MyService {}
+        @Component({
+          selector: 'app-provided',
+          template: '<p>hi</p>',
+          providers: [MyService]
+        })
+        export class ProvidedComponent {}
+      `, 'provided.ts');
+
+      expectCompiles(result);
+      expect(result).toContain('ProvidersFeature');
+    });
+
+    it('compiles component with empty providers', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-empty-prov',
+          template: '<p>hi</p>',
+          providers: []
+        })
+        export class EmptyProvComponent {}
+      `, 'empty-prov.ts');
+
+      expectCompiles(result);
+      expect(result).not.toContain('ProvidersFeature');
+    });
+
+    it('compiles component with viewProviders', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        class ViewSvc {}
+        @Component({
+          selector: 'app-view-prov',
+          template: '<p>hi</p>',
+          viewProviders: [ViewSvc]
+        })
+        export class ViewProvComponent {}
+      `, 'view-prov.ts');
+
+      expectCompiles(result);
+      expect(result).toContain('ProvidersFeature');
+    });
+
+    it('compiles component with animations', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-animated',
+          template: '<p>hi</p>',
+          animations: [{ type: 7, name: 'fade', definitions: [] }]
+        })
+        export class AnimatedComponent {}
+      `, 'animated.ts');
+
+      expectCompiles(result);
+    });
+
     it('inlines templateUrl content at compile time', () => {
       const result = compile(`
         import { Component } from '@angular/core';
