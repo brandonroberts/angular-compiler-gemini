@@ -564,6 +564,80 @@ describe('@Component', () => {
     });
   });
 
+  describe('Complex Templates', () => {
+    it('compiles nested control flow with bindings and implicit variables', () => {
+      const result = compile(`
+        import { Component, signal, input, computed } from '@angular/core';
+        @Component({
+          selector: 'app-dashboard',
+          template: \`
+            <header>
+              <h1>{{ title() }}</h1>
+              @for (link of links(); track link.path) {
+                <a [class.active]="link.path === activePath()">{{ link.label }}</a>
+              }
+            </header>
+
+            @switch (view()) {
+              @case ('list') {
+                @for (item of items(); track item.id; let i = $index, last = $last) {
+                  <div [class.highlight]="item.priority === 'high'"
+                       [class.last-item]="last"
+                       (click)="select(item)">
+                    <span>{{ i + 1 }}. {{ item.name }}</span>
+                    @if (item.description) {
+                      <p>{{ item.description }}</p>
+                    }
+                    @if (item.tags.length > 0) {
+                      @for (tag of item.tags; track tag) {
+                        <span class="tag">{{ tag }}</span>
+                      }
+                    }
+                  </div>
+                } @empty {
+                  <p>No items</p>
+                }
+              }
+              @case ('detail') {
+                @if (selected()) {
+                  <h2>{{ selected().name }}</h2>
+                  <button (click)="back()">Back</button>
+                }
+              }
+              @default {
+                <p>Select a view</p>
+              }
+            }
+
+            <footer>{{ count() }} items</footer>
+          \`
+        })
+        export class DashboardComponent {
+          title = input('Dashboard');
+          links = signal([{ path: '/home', label: 'Home' }]);
+          activePath = signal('/home');
+          view = signal('list');
+          items = signal<any[]>([]);
+          selected = signal<any>(null);
+          count = computed(() => this.items().length);
+          select(item: any) {}
+          back() {}
+        }
+      `, 'dashboard.ts');
+
+      expectCompiles(result);
+      // All major instruction types present
+      expect(result).toContain('ɵɵconditional');
+      expect(result).toContain('ɵɵrepeaterCreate');
+      expect(result).toContain('ɵɵrepeater');
+      expect(result).toContain('ɵɵtextInterpolate');
+      expect(result).toContain('ɵɵadvance');
+      // Multiple generated template functions for embedded views
+      const templateFns = result.match(/function DashboardComponent_/g);
+      expect(templateFns!.length).toBeGreaterThanOrEqual(5);
+    });
+  });
+
   describe('Same-file Resolution', () => {
     it('resolves selectors without external registry', () => {
       const result = compile(`
