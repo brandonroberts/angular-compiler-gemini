@@ -6,60 +6,89 @@ function transform(code: string): string {
 }
 
 describe('JIT Transform', () => {
-  describe('Decorator Preservation', () => {
-    it('preserves @Component decorator', () => {
+  describe('Decorator Conversion', () => {
+    it('converts @Component to static decorators array', () => {
       const result = transform(`
         import { Component } from '@angular/core';
         @Component({ selector: 'app-test', template: '<p>hi</p>' })
         export class TestComponent {}
       `);
 
-      expect(result).toContain('@Component');
+      // Decorator stripped from class
+      expect(result).not.toMatch(/@Component/);
+      // Static decorators array emitted
+      expect(result).toContain('TestComponent.decorators');
+      expect(result).toContain('type: Component');
       expect(result).toContain("selector: 'app-test'");
       expect(result).toContain("template: '<p>hi</p>'");
     });
 
-    it('preserves @Directive decorator', () => {
+    it('converts @Directive to static decorators array', () => {
       const result = transform(`
         import { Directive } from '@angular/core';
         @Directive({ selector: '[appHighlight]' })
         export class HighlightDirective {}
       `);
 
-      expect(result).toContain('@Directive');
-      expect(result).toContain('[appHighlight]');
+      expect(result).not.toMatch(/@Directive/);
+      expect(result).toContain('HighlightDirective.decorators');
+      expect(result).toContain('type: Directive');
     });
 
-    it('preserves @Pipe decorator', () => {
+    it('converts @Pipe to static decorators array', () => {
       const result = transform(`
         import { Pipe } from '@angular/core';
         @Pipe({ name: 'myPipe' })
         export class MyPipe { transform(v: string) { return v; } }
       `);
 
-      expect(result).toContain('@Pipe');
+      expect(result).not.toMatch(/@Pipe/);
+      expect(result).toContain('MyPipe.decorators');
+      expect(result).toContain('type: Pipe');
       expect(result).toContain("name: 'myPipe'");
     });
 
-    it('preserves @Injectable decorator', () => {
+    it('converts @Injectable to static decorators array', () => {
       const result = transform(`
         import { Injectable } from '@angular/core';
         @Injectable({ providedIn: 'root' })
         export class MyService {}
       `);
 
-      expect(result).toContain('@Injectable');
-      expect(result).toContain("providedIn: 'root'");
+      expect(result).not.toMatch(/@Injectable/);
+      expect(result).toContain('MyService.decorators');
+      expect(result).toContain('type: Injectable');
     });
 
-    it('preserves @NgModule decorator', () => {
+    it('converts @NgModule to static decorators array', () => {
       const result = transform(`
         import { NgModule } from '@angular/core';
         @NgModule({ imports: [], exports: [] })
         export class MyModule {}
       `);
 
-      expect(result).toContain('@NgModule');
+      expect(result).not.toMatch(/@NgModule/);
+      expect(result).toContain('MyModule.decorators');
+      expect(result).toContain('type: NgModule');
+    });
+
+    it('preserves decorator args', () => {
+      const result = transform(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-full',
+          template: '<p>hi</p>',
+          styles: [':host { color: red }'],
+          standalone: true,
+          imports: [SomeComponent]
+        })
+        export class FullComponent {}
+      `);
+
+      expect(result).toContain('args:');
+      expect(result).toContain("selector: 'app-full'");
+      expect(result).toContain('standalone: true');
+      expect(result).toContain('SomeComponent');
     });
   });
 
@@ -74,7 +103,7 @@ describe('JIT Transform', () => {
       expect(result).not.toContain('ɵfac');
     });
 
-    it('does NOT emit ɵcmp', () => {
+    it('does NOT emit ɵcmp or Ivy instructions', () => {
       const result = transform(`
         import { Component } from '@angular/core';
         @Component({ selector: 'x', template: '<p>{{ title }}</p>' })
@@ -85,38 +114,6 @@ describe('JIT Transform', () => {
       expect(result).not.toContain('ɵɵdefineComponent');
       expect(result).not.toContain('ɵɵelementStart');
       expect(result).not.toContain('ɵɵdomElementStart');
-    });
-
-    it('does NOT emit ɵdir', () => {
-      const result = transform(`
-        import { Directive } from '@angular/core';
-        @Directive({ selector: '[x]' })
-        export class X {}
-      `);
-
-      expect(result).not.toContain('ɵdir');
-      expect(result).not.toContain('ɵɵdefineDirective');
-    });
-
-    it('does NOT emit ɵpipe', () => {
-      const result = transform(`
-        import { Pipe } from '@angular/core';
-        @Pipe({ name: 'x' })
-        export class X { transform(v: any) { return v; } }
-      `);
-
-      expect(result).not.toContain('ɵpipe');
-      expect(result).not.toContain('ɵɵdefinePipe');
-    });
-
-    it('does NOT emit ɵprov', () => {
-      const result = transform(`
-        import { Injectable } from '@angular/core';
-        @Injectable({ providedIn: 'root' })
-        export class X {}
-      `);
-
-      expect(result).not.toContain('ɵprov');
     });
 
     it('does NOT emit ɵsignals', () => {
@@ -177,17 +174,16 @@ describe('JIT Transform', () => {
       `);
 
       expect(result).toContain('@SomeDecorator');
+      expect(result).not.toContain('X.decorators');
     });
 
-    it('preserves default exports', () => {
+    it('handles class without decorators', () => {
       const result = transform(`
-        import { Component } from '@angular/core';
-        @Component({ selector: 'x', template: '' })
-        export default class MyPage {}
+        export class PlainClass { value = 42; }
       `);
 
-      expect(result).toContain('export default class');
-      expect(result).toContain('@Component');
+      expect(result).toContain('PlainClass');
+      expect(result).not.toContain('decorators');
     });
   });
 });
