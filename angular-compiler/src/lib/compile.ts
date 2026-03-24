@@ -456,13 +456,23 @@ function detectSignals(node: ts.ClassDeclaration) {
 
       // 1. SIGNAL INPUTS (Standard & Required)
       if (callExpr.includes('input')) {
+        const isRequired = callExpr.includes('.required');
+        // Extract transform from options: input(val, { transform }) or input.required({ transform })
+        let transform: any = null;
+        const optionsArg = isRequired ? m.initializer.arguments[0] : m.initializer.arguments[1];
+        if (optionsArg && ts.isObjectLiteralExpression(optionsArg)) {
+          for (const prop of optionsArg.properties) {
+            if (ts.isPropertyAssignment(prop) && prop.name.getText() === 'transform') {
+              transform = new o.WrappedNodeExpr(prop.initializer);
+            }
+          }
+        }
         inputs[name] = {
           classPropertyName: name,
           bindingPropertyName: name,
           isSignal: true,
-          required: callExpr.includes('.required'),
-          // v21 supports transform functions in the descriptor
-          transform: callExpr.includes('transform') ? true : null 
+          required: isRequired,
+          transform,
         };
       }
 
