@@ -1,36 +1,11 @@
 import { Plugin } from 'vite';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ComponentRegistry, RegistryEntry } from './registry';
+import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
 import { compile } from './compile';
 
 const DECORATOR_RE = /@(Component|Directive|Pipe|Injectable|NgModule)/;
-
-/**
- * Generate HMR/live-reload code for a compiled file.
- *
- * Angular's ɵɵreplaceMetadata requires HMR tracking metadata that the full
- * ngtsc pipeline emits during compilation. Since this lite compiler doesn't
- * produce that metadata, we use Vite's built-in full-reload mechanism for
- * fast feedback during development.
- *
- * This is equivalent to what Angular CLI did before v19's HMR support.
- * The self-accept prevents Vite from bubbling the update to parent modules.
- */
-function generateHmrCode(compiledCode: string, entries: RegistryEntry[]): string {
-  const hasAngularDeclarations = entries.some(e =>
-    e.kind === 'component' || e.kind === 'directive' || e.kind === 'pipe'
-  );
-  if (!hasAngularDeclarations) return '';
-
-  return `
-if (import.meta.hot) {
-  import.meta.hot.accept(() => {
-    import.meta.hot.invalidate('Angular component changed');
-  });
-}`;
-}
 
 /**
  * Vite plugin that performs global analysis across all Angular source files,
@@ -44,7 +19,6 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
   const dependents = new Map<string, Set<string>>(); // className → set of files that import it
-  let isServe = false;
 
   function scanDirectory(dir: string) {
     if (!fs.existsSync(dir)) return;
@@ -76,10 +50,6 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
     name: 'vite-angular-global-analysis',
     enforce: 'pre',
 
-    config(_config, { command }) {
-      isServe = command === 'serve';
-    },
-
     buildStart() {
       registry.clear();
       for (const dir of srcDirs) {
@@ -105,18 +75,7 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
         }
       },
       handler(code, id) {
-        let compiled = compile(code, id, registry);
-
-        // Append HMR code in dev mode for component files
-        if (isServe) {
-          const entries = scanFile(code, id);
-          const hmrCode = generateHmrCode(compiled, entries);
-          if (hmrCode) {
-            compiled += '\n' + hmrCode;
-          }
-        }
-
-        return { code: compiled };
+        return { code: compile(code, id, registry) };
       }
     },
 
