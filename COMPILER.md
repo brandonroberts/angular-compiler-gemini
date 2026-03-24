@@ -43,41 +43,7 @@ The compiler is split into two phases:
 | `ast-translator.ts` | 290 | Angular output AST → TypeScript AST visitor (all expression/statement types) |
 | `registry.ts` | 110 | OXC-based file scanner, `ComponentRegistry` type |
 | `global-analysis-plugin.ts` | 133 | Vite plugin: registry build, transform orchestration, HMR invalidation |
-| `jit-transform.ts` | ~200 | JIT-only transform: preserve decorators, emit ɵfac + signal metadata |
-| **Total** | **~1,250** | |
-
-## Compilation Modes
-
-The plugin supports two modes via the `jit` flag:
-
-```ts
-// Full AOT-style compilation (default)
-globalAnalysisPlugin({ srcDirs: ['src'] })
-
-// JIT-only mode: skip template compilation
-globalAnalysisPlugin({ srcDirs: ['src'], jit: true })
-```
-
-### Full Mode (default)
-
-Compiles templates into Ivy instructions (`ɵɵdefineComponent`), strips decorators, emits final executable code. Templates are compiled at build time — no runtime compilation overhead.
-
-### JIT Mode
-
-Preserves `@Component`/`@Directive`/`@Pipe`/`@Injectable` decorators intact for Angular's runtime JIT compiler. Only emits:
-- `ɵfac` — factory function for dependency injection
-- `ɵsignals` — signal metadata (inputs, models, outputs, queries)
-
-No template compilation, no global analysis, no registry scan. Faster build, slower app startup (templates compiled in browser).
-
-| | Full Mode | JIT Mode |
-|---|---|---|
-| Template compilation | Build time (Ivy instructions) | Runtime (browser JIT) |
-| Decorators | Stripped | Preserved |
-| Global analysis | Yes (registry scan) | No |
-| Output | `ɵɵdefineComponent` + template fn | Decorators + `ɵfac` + `ɵsignals` |
-| Build speed | ~0.5-2ms/file | ~0.2ms/file |
-| App startup | Fast (pre-compiled) | Slower (JIT in browser) |
+| **Total** | **1,051** | |
 
 ## What's Supported
 
@@ -275,7 +241,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-137 tests across 12 spec files:
+115 tests across 11 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -288,6 +254,5 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 | `registry.spec.ts` | 6 | All decorator types, multi-declaration, NgModule exports |
 | `global-analysis.spec.ts` | 5 | Cross-file component, pipe, directive resolution |
 | `error-handling.spec.ts` | 6 | Unknown decorators, undecorated classes, selectorless components, invalid templates |
-| `jit-transform.spec.ts` | 22 | JIT mode: decorator preservation, factory emission, no template compilation, signal metadata, edge cases |
 | `compile.spec.ts` | 2 | Original smoke tests |
 | `app.spec.ts` | 1 | Application-level test |

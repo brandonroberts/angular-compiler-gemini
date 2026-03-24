@@ -4,20 +4,8 @@ import * as path from 'path';
 import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
 import { compile } from './compile';
-import { jitTransform } from './jit-transform';
 
 const DECORATOR_RE = /@(Component|Directive|Pipe|Injectable|NgModule)/;
-
-export interface AngularPluginOptions {
-  /** Source directories to scan for global analysis. Default: ['src'] */
-  srcDirs?: string[];
-  /**
-   * JIT mode: skip template compilation, preserve decorators for
-   * Angular's runtime JIT compiler. Only emits ɵfac + signal metadata.
-   * Default: false (full AOT-style compilation)
-   */
-  jit?: boolean;
-}
 
 /**
  * Vite plugin that performs global analysis across all Angular source files,
@@ -27,11 +15,7 @@ export interface AngularPluginOptions {
  * Phase 2 (transform):  Pass the registry to compile() for each file.
  * HMR:                  Rescan changed files and invalidate dependents.
  */
-export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = {}): Plugin {
-  // Backward compat: accept string[] as srcDirs
-  const opts: AngularPluginOptions = Array.isArray(options) ? { srcDirs: options } : options;
-  const srcDirs = opts.srcDirs || ['src'];
-  const jitMode = opts.jit || false;
+export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
   const dependents = new Map<string, Set<string>>(); // className → set of files that import it
@@ -69,7 +53,6 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
     enforce: 'pre',
 
     buildStart() {
-      if (jitMode) return; // JIT mode: no global analysis needed
       registry.clear();
       for (const dir of srcDirs) {
         scanDirectory(path.resolve(process.cwd(), dir));
@@ -94,9 +77,6 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
         }
       },
       handler(code, id) {
-        if (jitMode) {
-          return { code: jitTransform(code, id).code };
-        }
         const result = compile(code, id, registry);
         // Track resource dependencies for file watching
         for (const dep of result.resourceDependencies) {
