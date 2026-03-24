@@ -49,6 +49,8 @@ if (import.meta.hot) {
     if (!newModule) return;
     let replaced = false;${replaceBlocks}
     if (!replaced) {
+      // Fallback: if no component was successfully replaced (e.g. root component),
+      // trigger a full page reload
       import.meta.hot.invalidate('Component HMR failed, reloading');
     }
   });
@@ -71,8 +73,6 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   const resourceToSource = new Map<string, string>(); // resource path → .ts file path
   let resolvedConfig: ResolvedConfig;
   let isServe = false;
-  // Cache preprocessed styles to avoid redundant SCSS compilation on HMR
-  const styleCache = new Map<string, { mtime: number; css: string }>();
 
   /**
    * Extract styleUrl/styleUrls from source, read and preprocess them via Vite.
@@ -101,21 +101,53 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
       if (!/\.(scss|sass|less|styl)$/.test(url)) continue;
       const filePath = path.resolve(dir, url);
       try {
-        // Check cache: skip preprocessing if file hasn't changed
-        const stat = fs.statSync(filePath);
-        const mtime = stat.mtimeMs;
-        const cached = styleCache.get(filePath);
-        if (cached && cached.mtime === mtime) {
-          result.set(filePath, cached.css);
-          continue;
-        }
-
         const source = fs.readFileSync(filePath, 'utf-8');
         const processed = await preprocessCSS(source, filePath, resolvedConfig);
-        styleCache.set(filePath, { mtime, css: processed.code });
         result.set(filePath, processed.code);
       } catch (e: any) {
         console.warn(`[angular-compiler] Style preprocessing failed for ${filePath}: ${e.message}`);
+      }
+    }
+
+    return result.size > 0 ? result : undefined;
+  }
+
+  /**
+   * Preprocess inline styles that contain SCSS/Sass syntax.
+   * Detects styles with $ variables, & parent selectors, or nested rules
+   * and runs them through Vite's preprocessCSS.
+   */
+  async function preprocessInlineStyles(code: string, id: string): Promise<Map<number, string> | undefined> {
+    if (!code.includes('styles')) return undefined;
+
+    // Extract inline style strings using regex on the styles array
+    // Match styles: [`...`] or styles: ['...']
+    const stylesMatch = code.match(/styles\s*:\s*\[([\s\S]*?)\]/);
+    if (!stylesMatch) return undefined;
+
+    const stylesContent = stylesMatch[1];
+    // Extract individual style strings (backtick or quote delimited)
+    const styleStrings: string[] = [];
+    const stringPattern = /[`'"]([^`'"]*(?:\n[^`'"]*)*)[`'"]/g;
+    let match;
+    while ((match = stringPattern.exec(stylesContent)) !== null) {
+      styleStrings.push(match[1]);
+    }
+
+    if (styleStrings.length === 0) return undefined;
+
+    const result = new Map<number, string>();
+    for (let i = 0; i < styleStrings.length; i++) {
+      const style = styleStrings[i];
+      // Check if this looks like SCSS (has variables, nesting, or & selectors)
+      if (!/\$\w|&\s*[{:]|[^}]\s*\{[^}]*\{/.test(style)) continue;
+      try {
+        // Use .scss extension to tell Vite to preprocess as SCSS
+        const fakeScssPath = id.replace(/\.ts$/, `.inline-${i}.scss`);
+        const processed = await preprocessCSS(style, fakeScssPath, resolvedConfig);
+        result.set(i, processed.code);
+      } catch (e: any) {
+        console.warn(`[angular-compiler] Inline style preprocessing failed in ${id}: ${e.message}`);
       }
     }
 
@@ -185,10 +217,13 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
         }
       },
       async handler(code, id) {
-        // Pre-resolve style files: read and preprocess SCSS/Sass/Less via Vite
+        // Pre-resolve external style files: SCSS/Sass/Less via Vite
         const resolvedStyles = await resolveStyleFiles(code, id);
 
-        const result = compile(code, id, { registry, resolvedStyles });
+        // Pre-resolve inline styles that contain SCSS syntax
+        const resolvedInlineStyles = await preprocessInlineStyles(code, id);
+
+        const result = compile(code, id, { registry, resolvedStyles, resolvedInlineStyles });
         // Track resource dependencies for file watching
         for (const dep of result.resourceDependencies) {
           resourceToSource.set(dep, id);
@@ -210,14 +245,7 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
     },
 
     handleHotUpdate({ file, server, modules }) {
-      // Invalidate style cache when a style file changes
-      if (styleCache.has(file)) {
-        styleCache.delete(file);
-      }
-
-      // When an external resource file changes, invalidate the parent .ts module.
-      // This triggers re-compilation with the new content (template or styles)
-      // and the HMR accept handler runs ɵɵreplaceMetadata to update the view.
+      // When an external template/style file changes, invalidate the parent .ts module
       const parentSource = resourceToSource.get(file);
       if (parentSource) {
         const parentModule = server.moduleGraph.getModuleById(parentSource);
