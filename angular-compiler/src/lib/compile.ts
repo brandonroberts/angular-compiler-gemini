@@ -56,6 +56,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
   const parseFile = new ParseSourceFile(sourceCode, fileName);
   const parseLoc = new ParseLocation(parseFile, 0, 0, 0);
   const typeSourceSpan = new ParseSourceSpan(parseLoc, parseLoc);
+  const typeOnlyImports = collectTypeOnlyImports(sourceFile);
 
   // Inject 'import * as i0 from "@angular/core"'
   sourceFile = injectAngularImport(sourceFile);
@@ -339,14 +340,37 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
             }
           });
 
-          const fac = compileFactoryFunction({
-            name: className,
-            type: classRef,
-            typeArgumentCount: 0,
-            deps: [],
-            target: targetType,
-          });
-          ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
+          const deps = extractConstructorDeps(node, typeOnlyImports);
+          if (deps === null) {
+            // Inherited factory: class extends Parent without own constructor
+            // Emit: ɵfac = (() => { let base; return (t) => (base || (base = i0.ɵɵgetInheritedFactory(Class)))(t || Class); })()
+            const baseVar = `ɵ${className}_BaseFactory`;
+            const facCode = `/*@__PURE__*/ (() => { let ${baseVar}; return function ${className}_Factory(__ngFactoryType__) { return (${baseVar} || (${baseVar} = i0.ɵɵgetInheritedFactory(${className})))(__ngFactoryType__ || ${className}); }; })()`;
+            ivyProps.unshift(ts.factory.createPropertyDeclaration(
+              [ts.factory.createModifier(ts.SyntaxKind.StaticKeyword)],
+              'ɵfac',
+              undefined, undefined,
+              ts.factory.createIdentifier(facCode) // Will be printed as-is
+            ));
+          } else if (deps === 'invalid') {
+            // Invalid factory: type-only imports can't be injected
+            const facCode = `function ${className}_Factory(__ngFactoryType__) { i0.ɵɵinvalidFactory(); }`;
+            ivyProps.unshift(ts.factory.createPropertyDeclaration(
+              [ts.factory.createModifier(ts.SyntaxKind.StaticKeyword)],
+              'ɵfac',
+              undefined, undefined,
+              ts.factory.createIdentifier(facCode)
+            ));
+          } else {
+            const fac = compileFactoryFunction({
+              name: className,
+              type: classRef,
+              typeArgumentCount: 0,
+              deps,
+              target: targetType,
+            });
+            ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
+          }
 
           const angularDecSet = new Set(angularDecorators);
           return ts.factory.updateClassDeclaration(
@@ -677,6 +701,116 @@ function collectDeferBlocks(nodes: any[]): any[] {
   }
   nodes.forEach(walk);
   return result;
+}
+
+/** Collect type-only imported names: `import type { X }` and `import { type X }`. */
+function collectTypeOnlyImports(sf: ts.SourceFile): Set<string> {
+  const result = new Set<string>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause) continue;
+    const clause = stmt.importClause;
+    if (clause.isTypeOnly) {
+      // import type { X, Y } from '...'
+      if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const el of clause.namedBindings.elements) result.add(el.name.text);
+      }
+      if (clause.name) result.add(clause.name.text);
+    } else if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      // import { type X, Y } from '...'
+      for (const el of clause.namedBindings.elements) {
+        if (el.isTypeOnly) result.add(el.name.text);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Analyze constructor parameters for dependency injection.
+ * Returns:
+ * - R3DependencyMetadata[] for normal constructors
+ * - null if class extends another without own constructor (use inherited factory)
+ * - 'invalid' if any parameter has a type-only import token
+ */
+function extractConstructorDeps(node: ts.ClassDeclaration, typeOnlyImports: Set<string>): any[] | 'invalid' | null {
+  const hasSuper = node.heritageClauses?.some(h => h.token === ts.SyntaxKind.ExtendsKeyword);
+  const ctor = node.members.find(ts.isConstructorDeclaration) as ts.ConstructorDeclaration | undefined;
+
+  if (!ctor) {
+    return hasSuper ? null : []; // Inherited factory or zero-arg
+  }
+
+  const deps: any[] = [];
+  let invalid = false;
+
+  for (const param of ctor.parameters) {
+    let token: string | null = null;
+    let attributeNameType: any = null;
+    let host = false, optional = false, self = false, skipSelf = false;
+
+    // Extract type annotation as token
+    if (param.type && ts.isTypeReferenceNode(param.type)) {
+      token = param.type.typeName.getText();
+    } else if (param.type && ts.isUnionTypeNode(param.type)) {
+      // Handle `Service | null` — find first TypeReference
+      for (const t of param.type.types) {
+        if (ts.isTypeReferenceNode(t)) { token = t.typeName.getText(); break; }
+      }
+    }
+
+    // Process parameter decorators
+    const paramDecorators = ts.getDecorators(param);
+    if (paramDecorators) {
+      for (const dec of paramDecorators) {
+        if (!ts.isCallExpression(dec.expression)) continue;
+        const decName = dec.expression.expression.getText();
+        const args = dec.expression.arguments;
+
+        switch (decName) {
+          case 'Inject':
+            if (args.length > 0) {
+              if (ts.isStringLiteral(args[0])) {
+                token = args[0].text;
+              } else {
+                token = args[0].getText();
+              }
+            }
+            break;
+          case 'Optional': optional = true; break;
+          case 'Self': self = true; break;
+          case 'SkipSelf': skipSelf = true; break;
+          case 'Host': host = true; break;
+          case 'Attribute':
+            if (args.length > 0 && ts.isStringLiteral(args[0])) {
+              attributeNameType = new o.LiteralExpr(args[0].text);
+              token = ''; // Attribute injection has no class token
+            }
+            break;
+        }
+      }
+    }
+
+    if (!token && !attributeNameType) {
+      invalid = true;
+      continue;
+    }
+
+    if (token && typeOnlyImports.has(token)) {
+      invalid = true;
+      continue;
+    }
+
+    deps.push({
+      token: token ? new o.WrappedNodeExpr(ts.factory.createIdentifier(token)) : new o.LiteralExpr(null),
+      attributeNameType,
+      host,
+      optional,
+      self,
+      skipSelf,
+    });
+  }
+
+  return invalid ? 'invalid' : deps;
 }
 
 /**
