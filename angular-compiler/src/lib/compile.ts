@@ -5,6 +5,10 @@ import {
   compileComponentFromMetadata,
   compileDirectiveFromMetadata,
   compilePipeFromMetadata,
+  compileNgModule,
+  compileInjector,
+  R3NgModuleMetadataKind,
+  R3SelectorScopeMode,
   FactoryTarget,
   compileFactoryFunction,
   parseTemplate,
@@ -88,11 +92,29 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
 
                 // Resolve component dependencies by looking up selectors from the registry.
                 // The global analysis plugin provides the registry; falls back to file-local scan.
-                const declarations = (Array.isArray(meta.imports) ? meta.imports : []).map(dep => {
+                // NgModule imports are expanded to their exported declarations.
+                const declarations: any[] = [];
+                for (const dep of (Array.isArray(meta.imports) ? meta.imports : [])) {
                   const depClassName = dep.node.getText();
-
-                  // Try external registry first, then file-local fallback
                   const registryEntry = registry?.get(depClassName);
+
+                  // If importing an NgModule, expand its exports into individual declarations
+                  if (registryEntry?.kind === 'ngmodule' && registryEntry.exports) {
+                    for (const exportedName of registryEntry.exports) {
+                      const exportedEntry = registry?.get(exportedName);
+                      if (exportedEntry && exportedEntry.kind !== 'ngmodule') {
+                        const kind = exportedEntry.kind === 'pipe' ? 1 : 0;
+                        declarations.push({
+                          type: dep, // Reference the NgModule (Angular resolves at runtime)
+                          selector: exportedEntry.selector,
+                          kind,
+                          ...(kind === 1 ? { name: exportedEntry.pipeName } : {})
+                        });
+                      }
+                    }
+                    continue;
+                  }
+
                   const selector = registryEntry?.selector ?? localSelectors.get(depClassName);
                   const kind = registryEntry?.kind === 'pipe' ? 1 : 0; // 0=Directive, 1=Pipe
 
@@ -100,13 +122,13 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                     console.warn(`[angular-compiler] Could not resolve selector for "${depClassName}" in ${fileName}`);
                   }
 
-                  return {
+                  declarations.push({
                     type: dep,
                     selector: selector || depClassName.toLowerCase(),
                     kind,
                     ...(kind === 1 ? { name: registryEntry?.pipeName } : {})
-                  };
-                });
+                  });
+                }
 
                 const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
@@ -218,6 +240,39 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                 }, true);
                 ivyProps.push(createStaticProperty('ɵprov', translateOutputAST(inj.expression)));
                 break;
+
+              case 'NgModule':
+                targetType = FactoryTarget.NgModule;
+                const ngModuleImports = Array.isArray(meta.imports) ? meta.imports : [];
+                const ngModuleDeclarations = Array.isArray(meta.declarations) ? meta.declarations : [];
+                const ngModuleExports = Array.isArray(meta.exports) ? meta.exports : [];
+                const ngModuleBootstrap = Array.isArray(meta.bootstrap) ? meta.bootstrap : [];
+
+                const ngMod = compileNgModule({
+                  kind: R3NgModuleMetadataKind.Global,
+                  type: classRef,
+                  bootstrap: ngModuleBootstrap.map((e: o.WrappedNodeExpr<any>) => ({ value: e, type: e })),
+                  declarations: ngModuleDeclarations.map((e: o.WrappedNodeExpr<any>) => ({ value: e, type: e })),
+                  publicDeclarationTypes: null,
+                  imports: ngModuleImports.map((e: o.WrappedNodeExpr<any>) => ({ value: e, type: e })),
+                  includeImportTypes: true,
+                  exports: ngModuleExports.map((e: o.WrappedNodeExpr<any>) => ({ value: e, type: e })),
+                  selectorScopeMode: R3SelectorScopeMode.Inline,
+                  containsForwardDecls: false,
+                  schemas: [],
+                  id: null,
+                });
+                ivyProps.push(createStaticProperty('ɵmod', translateOutputAST(ngMod.expression)));
+
+                // Compile the injector (providers + imports)
+                const injector = compileInjector({
+                  name: className,
+                  type: classRef,
+                  providers: meta.providers ? new o.LiteralArrayExpr(meta.providers) : null,
+                  imports: ngModuleImports.map((e: o.WrappedNodeExpr<any>) => e),
+                });
+                ivyProps.push(createStaticProperty('ɵinj', translateOutputAST(injector.expression)));
+                break;
             }
           });
 
@@ -289,7 +344,7 @@ function extractMetadata(dec: ts.Decorator): any {
       case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
       case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
       case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
-      case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
+      case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': case 'declarations': case 'exports': case 'bootstrap': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
       default: meta[key] = valText.replace(/['"`]/g, '');
     }
   });

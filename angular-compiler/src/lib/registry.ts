@@ -1,12 +1,14 @@
 import * as ts from 'typescript';
 
 export interface RegistryEntry {
-  /** CSS selector for components/directives, pipe name for pipes */
+  /** CSS selector for components/directives, pipe name for pipes, class name for NgModules */
   selector: string;
   /** What kind of Angular declaration this is */
-  kind: 'component' | 'directive' | 'pipe';
+  kind: 'component' | 'directive' | 'pipe' | 'ngmodule';
   /** The pipe name (only for pipes) */
   pipeName?: string;
+  /** Exported class names (only for NgModules) */
+  exports?: string[];
   /** The source file this declaration was found in */
   fileName: string;
   /** The class name */
@@ -24,7 +26,7 @@ export type ComponentRegistry = Map<string, RegistryEntry>;
 export function scanFile(code: string, fileName: string): RegistryEntry[] {
   const entries: RegistryEntry[] = [];
 
-  if (!/@(Component|Directive|Pipe)/.test(code)) {
+  if (!/@(Component|Directive|Pipe|NgModule)/.test(code)) {
     return entries;
   }
 
@@ -40,7 +42,7 @@ export function scanFile(code: string, fileName: string): RegistryEntry[] {
       if (!ts.isCallExpression(dec.expression)) continue;
 
       const decoratorName = dec.expression.expression.getText(sourceFile);
-      if (!['Component', 'Directive', 'Pipe'].includes(decoratorName)) continue;
+      if (!['Component', 'Directive', 'Pipe', 'NgModule'].includes(decoratorName)) continue;
 
       const args = dec.expression.arguments;
       if (args.length === 0 || !ts.isObjectLiteralExpression(args[0])) continue;
@@ -48,6 +50,7 @@ export function scanFile(code: string, fileName: string): RegistryEntry[] {
       const obj = args[0] as ts.ObjectLiteralExpression;
       let selector: string | undefined;
       let pipeName: string | undefined;
+      let moduleExports: string[] | undefined;
 
       for (const prop of obj.properties) {
         if (!ts.isPropertyAssignment(prop)) continue;
@@ -60,9 +63,22 @@ export function scanFile(code: string, fileName: string): RegistryEntry[] {
         if (key === 'name' && ts.isStringLiteral(val) && decoratorName === 'Pipe') {
           pipeName = val.text;
         }
+        if (key === 'exports' && ts.isArrayLiteralExpression(val) && decoratorName === 'NgModule') {
+          moduleExports = val.elements
+            .filter(ts.isIdentifier)
+            .map(e => e.getText(sourceFile));
+        }
       }
 
-      if (decoratorName === 'Pipe' && pipeName) {
+      if (decoratorName === 'NgModule') {
+        entries.push({
+          selector: stmt.name.text,
+          kind: 'ngmodule',
+          exports: moduleExports || [],
+          fileName,
+          className: stmt.name.text,
+        });
+      } else if (decoratorName === 'Pipe' && pipeName) {
         entries.push({
           selector: pipeName,
           kind: 'pipe',

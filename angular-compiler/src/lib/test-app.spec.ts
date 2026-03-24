@@ -647,6 +647,112 @@ describe('Exhaustive Angular Compiler Validation', () => {
     });
   });
 
+  // ─── @NgModule ─────────────────────────────────────────────────────
+
+  describe('@NgModule', () => {
+    it('compiles a basic NgModule', () => {
+      const result = compile(`
+        import { NgModule, Component } from '@angular/core';
+
+        @Component({ selector: 'app-child', template: '<span>child</span>' })
+        export class ChildComponent {}
+
+        @NgModule({
+          declarations: [ChildComponent],
+          exports: [ChildComponent],
+          imports: []
+        })
+        export class ChildModule {}
+      `, 'child.module.ts');
+
+      expectCompiles(result);
+      expect(result).toContain('ɵmod');
+      expect(result).toContain('ɵinj');
+      expect(result).toContain('ɵfac');
+    });
+
+    it('compiles NgModule with providers', () => {
+      const result = compile(`
+        import { NgModule, Injectable } from '@angular/core';
+
+        @Injectable()
+        export class MyService {}
+
+        @NgModule({
+          providers: [MyService]
+        })
+        export class ServiceModule {}
+      `, 'service.module.ts');
+
+      expectCompiles(result);
+      expect(result).toContain('ɵmod');
+      expect(result).toContain('ɵinj');
+      expect(result).toContain('MyService');
+    });
+
+    it('resolves NgModule exports when imported by a component', () => {
+      const childSrc = `
+        import { Component } from '@angular/core';
+        @Component({ selector: 'mod-button', template: '<button>click</button>' })
+        export class ModButtonComponent {}
+      `;
+
+      const moduleSrc = `
+        import { NgModule } from '@angular/core';
+        import { ModButtonComponent } from './mod-button';
+        @NgModule({
+          declarations: [ModButtonComponent],
+          exports: [ModButtonComponent]
+        })
+        export class ButtonModule {}
+      `;
+
+      const appSrc = `
+        import { Component } from '@angular/core';
+        import { ButtonModule } from './button.module';
+        @Component({
+          selector: 'app-mod-test',
+          template: '<mod-button></mod-button>',
+          imports: [ButtonModule]
+        })
+        export class ModTestComponent {}
+      `;
+
+      const registry = buildRegistry({
+        'mod-button.ts': childSrc,
+        'button.module.ts': moduleSrc,
+      });
+
+      // Verify NgModule in registry
+      expect(registry.get('ButtonModule')?.kind).toBe('ngmodule');
+      expect(registry.get('ButtonModule')?.exports).toContain('ModButtonComponent');
+      expect(registry.get('ModButtonComponent')?.selector).toBe('mod-button');
+
+      const result = compile(appSrc, 'app.ts', registry);
+
+      expectCompiles(result);
+      expect(result).toContain('ɵcmp');
+      // Should use ɵɵelement (not ɵɵdomElement) since mod-button is resolved via NgModule exports
+      expect(result).not.toContain('ɵɵdomElement');
+    });
+
+    it('scanFile extracts NgModule with exports', () => {
+      const entries = scanFile(`
+        import { NgModule } from '@angular/core';
+        @NgModule({
+          declarations: [FooComponent],
+          exports: [FooComponent, BarDirective]
+        })
+        export class SharedModule {}
+      `, 'shared.module.ts');
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0].kind).toBe('ngmodule');
+      expect(entries[0].className).toBe('SharedModule');
+      expect(entries[0].exports).toEqual(['FooComponent', 'BarDirective']);
+    });
+  });
+
   // ─── changeDetection and encapsulation ────────────────────────────
 
   describe('changeDetection and encapsulation', () => {
