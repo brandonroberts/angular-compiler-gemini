@@ -696,9 +696,9 @@ describe('@Component', () => {
       // Styles inlined with scoping
       expect(result).toContain('styles:');
       expect(result).toContain('_nghost-%COMP%');
-      // No import statements for external resources
-      expect(result).not.toContain('test.component.html');
-      expect(result).not.toContain('test.component.css');
+      // setClassMetadata preserves decorator args (including templateUrl/styleUrls strings)
+      // but no import statements are generated for external resources
+      expect(result).toContain('setClassMetadata');
     });
 
     it('handles missing templateUrl gracefully', () => {

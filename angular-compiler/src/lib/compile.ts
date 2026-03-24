@@ -19,6 +19,7 @@ import {
   ParseSourceFile,
   ParseLocation,
   ParseSourceSpan,
+  compileClassMetadata,
 } from '@angular/compiler';
 import { AstTranslator } from './ast-translator';
 import { ComponentRegistry } from './registry';
@@ -371,6 +372,30 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
             });
             ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
           }
+
+          // Emit setClassMetadata for runtime decorator reflection (devMode only)
+          angularDecorators.forEach(dec => {
+            const call = dec.expression as ts.CallExpression;
+            const decName = call.expression.getText();
+            const decArgsNode = call.arguments[0];
+
+            try {
+              const classMetadataExpr = compileClassMetadata({
+                type: new o.WrappedNodeExpr(ts.factory.createIdentifier(className)),
+                decorators: new o.LiteralArrayExpr([
+                  new o.LiteralMapExpr([
+                    { key: 'type', value: new o.WrappedNodeExpr(ts.factory.createIdentifier(decName)), quoted: false },
+                    ...(decArgsNode ? [{ key: 'args', value: new o.LiteralArrayExpr([new o.WrappedNodeExpr(decArgsNode)]), quoted: false }] : []),
+                  ])
+                ]),
+                ctorParameters: null,
+                propDecorators: null,
+              });
+              constantPool.statements.push(new o.ExpressionStatement(classMetadataExpr));
+            } catch {
+              // Skip if compileClassMetadata fails (e.g., unsupported metadata shape)
+            }
+          });
 
           const angularDecSet = new Set(angularDecorators);
           return ts.factory.updateClassDeclaration(
