@@ -1,4 +1,6 @@
 import * as ts from 'typescript';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as o from '@angular/compiler';
 import {
   ConstantPool,
@@ -108,8 +110,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
             switch (decoratorName) {
               case 'Component':
                 targetType = FactoryTarget.Component;
-                const res = processResources(meta, className);
-                fileResourceImports.push(...res.imports);
+                processResources();
 
                 // Resolve component dependencies by looking up selectors from the registry.
                 // The global analysis plugin provides the registry; falls back to file-local scan.
@@ -150,7 +151,31 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   });
                 }
 
-                const parsedTemplate = parseTemplate(meta.template || '', fileName, { preserveWhitespaces: meta.preserveWhitespaces });
+                // Resolve template content: inline template or read from templateUrl
+                let templateContent = meta.template || '';
+                if (!templateContent && meta.templateUrl) {
+                  try {
+                    const templatePath = path.resolve(path.dirname(fileName), meta.templateUrl);
+                    templateContent = fs.readFileSync(templatePath, 'utf-8');
+                  } catch {
+                    console.warn(`[angular-compiler] Could not read template file "${meta.templateUrl}" for ${className}`);
+                  }
+                }
+
+                // Resolve styles: read styleUrl/styleUrls files and inline their content
+                if (Array.isArray(meta.styleUrls)) {
+                  for (const url of meta.styleUrls) {
+                    try {
+                      const stylePath = path.resolve(path.dirname(fileName), url);
+                      const styleContent = fs.readFileSync(stylePath, 'utf-8');
+                      meta.styles.push(styleContent);
+                    } catch {
+                      console.warn(`[angular-compiler] Could not read style file "${url}" for ${className}`);
+                    }
+                  }
+                }
+
+                const parsedTemplate = parseTemplate(templateContent, fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
                 // 1. Map Signal Inputs to Ivy Descriptors
                 const ivyInputs: Record<string, any> = {};
@@ -217,22 +242,9 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   componentMeta.hasDirectiveDependencies = declarations.length > 0;
                 }
 
-                // Angular 21+: externalStyles for styleUrl imports (skip CSS processing)
-                if (ANGULAR_MAJOR >= 21) {
-                  componentMeta.externalStyles = res.styleSymbols.map(s => new o.ReadVarExpr(s));
-                } else if (res.styleSymbols.length > 0) {
-                  // Angular 19-20: append styleUrl imports as regular styles
-                  componentMeta.styles = [...meta.styles, ...res.styleSymbols];
-                }
 
                 const cmp = compileComponentFromMetadata(componentMeta, constantPool, bindingParser);
-
-                const cmpExpr = cmp.expression;
-                if (res.templateVar && cmpExpr instanceof o.LiteralMapExpr) {
-                  const tplEntry = cmpExpr.entries.find(e => e.key === 'template');
-                  if (tplEntry) tplEntry.value = new o.ReadVarExpr(res.templateVar);
-                }
-                ivyProps.push(createStaticProperty('ɵcmp', translateOutputAST(cmpExpr)));
+                ivyProps.push(createStaticProperty('ɵcmp', translateOutputAST(cmp.expression)));
                 break;
 
               case 'Directive':
@@ -382,8 +394,23 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
         }
         if (key === 'exportAs') meta.exportAs = [meta.exportAs];
         break;
+      case 'styleUrl':
+        // Angular supports singular styleUrl as shorthand
+        if (ts.isStringLiteral(valNode) || ts.isNoSubstitutionTemplateLiteral(valNode)) {
+          meta.styleUrls = [valNode.text];
+        } else {
+          meta.styleUrls = [valText.replace(/['"`]/g, '')];
+        }
+        break;
       case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => ts.isStringLiteral(e) ? e.text : e.getText().replace(/['"`]/g, '')); break;
-      case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text : e.getText().replace(/['"`]/g, '')); break;
+      case 'styles':
+        if (ts.isArrayLiteralExpression(valNode)) {
+          meta.styles = valNode.elements.map(e => ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text : e.getText().replace(/['"`]/g, ''));
+        } else if (ts.isStringLiteral(valNode) || ts.isNoSubstitutionTemplateLiteral(valNode)) {
+          // Angular supports singular styles as a string
+          meta.styles = [valNode.text];
+        }
+        break;
       case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': case 'declarations': case 'exports': case 'bootstrap': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
       default: meta[key] = valText.replace(/['"`]/g, '');
     }
@@ -391,20 +418,9 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
   return meta;
 }
 
-function processResources(meta: any, className: string) {
-  const imports: ts.ImportDeclaration[] = [], styleSymbols: string[] = [];
-  let templateVar: string | null = null;
-  if (meta.templateUrl) {
-    templateVar = `${className}_Template`;
-    imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(templateVar), undefined), ts.factory.createStringLiteral(`${meta.templateUrl}?raw`)));
-  }
-  if (Array.isArray(meta.styleUrls)) {
-    meta.styleUrls.forEach((url, i) => {
-      const sym = `${className}_Style_${i}`; styleSymbols.push(sym);
-      imports.push(ts.factory.createImportDeclaration(undefined, ts.factory.createImportClause(false, ts.factory.createIdentifier(sym), undefined), ts.factory.createStringLiteral(url)));
-    });
-  }
-  return { imports, styleSymbols, templateVar };
+/** Resources are read and inlined at compile time — no imports needed. */
+function processResources() {
+  return { imports: [] as ts.ImportDeclaration[] };
 }
 
 function detectSignals(node: ts.ClassDeclaration) {

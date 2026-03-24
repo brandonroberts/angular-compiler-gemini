@@ -529,21 +529,94 @@ describe('@Component', () => {
       expect(result).toContain('encapsulation: 3');
     });
 
-    it('generates imports for templateUrl and styleUrls', () => {
+    it('inlines templateUrl content at compile time', () => {
       const result = compile(`
         import { Component } from '@angular/core';
         @Component({
           selector: 'app-external',
-          templateUrl: './external.component.html',
-          styleUrls: ['./external.component.css']
+          templateUrl: './__fixtures__/test.component.html'
         })
         export class ExternalComponent {}
-      `, 'external.ts');
+      `, __filename);
 
       expectCompiles(result);
+      // Template content inlined — actual HTML elements compiled
       expect(result).toContain('ɵcmp');
-      expect(result).toContain('./external.component.html?raw');
-      expect(result).toContain('./external.component.css');
+      expect(result).toContain('wrapper');
+      expect(result).toContain('ɵɵdomElementStart');
+    });
+
+    it('inlines styleUrls content at compile time', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-styled',
+          template: '<p>hi</p>',
+          styleUrls: ['./__fixtures__/test.component.css']
+        })
+        export class StyledComponent {}
+      `, __filename);
+
+      expectCompiles(result);
+      expect(result).toContain('styles:');
+      // CSS content inlined with emulated encapsulation scoping
+      expect(result).toContain('_nghost-%COMP%');
+      expect(result).toContain('padding');
+    });
+
+    it('inlines singular styleUrl content', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-single-style',
+          template: '<p>hi</p>',
+          styleUrl: './__fixtures__/test.component.css'
+        })
+        export class SingleStyleComponent {}
+      `, __filename);
+
+      expectCompiles(result);
+      expect(result).toContain('styles:');
+      expect(result).toContain('_nghost-%COMP%');
+    });
+
+    it('inlines both templateUrl and styleUrls together', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-full-external',
+          templateUrl: './__fixtures__/test.component.html',
+          styleUrls: ['./__fixtures__/test.component.css']
+        })
+        export class FullExternalComponent {}
+      `, __filename);
+
+      expectCompiles(result);
+      // Template inlined
+      expect(result).toContain('wrapper');
+      expect(result).toContain('ɵɵdomElementStart');
+      // Styles inlined with scoping
+      expect(result).toContain('styles:');
+      expect(result).toContain('_nghost-%COMP%');
+      // No import statements for external resources
+      expect(result).not.toContain('test.component.html');
+      expect(result).not.toContain('test.component.css');
+    });
+
+    it('handles missing templateUrl gracefully', () => {
+      const result = compile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-missing',
+          templateUrl: './nonexistent.html'
+        })
+        export class MissingTemplateComponent {}
+      `, __filename);
+
+      // Should still compile with empty template
+      expectCompiles(result);
+      expect(result).toContain('ɵcmp');
+      expect(result).toContain('decls: 0');
     });
 
     it('compiles component using inject()', () => {
