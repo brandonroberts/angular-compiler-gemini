@@ -42,10 +42,17 @@ const ANGULAR_MAJOR = (() => {
  * @param registry - Optional external registry from the global analysis plugin.
  *   When provided, used to resolve component/directive selectors for template compilation.
  */
-export function compile(sourceCode: string, fileName: string, registry?: ComponentRegistry): string {
+export interface CompileResult {
+  code: string;
+  /** Absolute paths of external resources (templateUrl, styleUrl) read during compilation */
+  resourceDependencies: string[];
+}
+
+export function compile(sourceCode: string, fileName: string, registry?: ComponentRegistry): CompileResult {
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
+  const resourceDependencies: string[] = [];
   const parseFile = new ParseSourceFile(sourceCode, fileName);
   const parseLoc = new ParseLocation(parseFile, 0, 0, 0);
   const typeSourceSpan = new ParseSourceSpan(parseLoc, parseLoc);
@@ -161,6 +168,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   try {
                     const templatePath = path.resolve(path.dirname(fileName), meta.templateUrl);
                     templateContent = fs.readFileSync(templatePath, 'utf-8');
+                    resourceDependencies.push(templatePath);
                   } catch {
                     console.warn(`[angular-compiler] Could not read template file "${meta.templateUrl}" for ${className}`);
                   }
@@ -173,6 +181,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                       const stylePath = path.resolve(path.dirname(fileName), url);
                       const styleContent = fs.readFileSync(stylePath, 'utf-8');
                       meta.styles.push(styleContent);
+                      resourceDependencies.push(stylePath);
                     } catch {
                       console.warn(`[angular-compiler] Could not read style file "${url}" for ${className}`);
                     }
@@ -356,7 +365,10 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
   const mainCode = printer.printFile(result.transformed[0]);
   const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, sourceFile)).join('\n');
 
-  return `${resourceCode}\n${mainCode}\n\n${constants}`;
+  return {
+    code: `${resourceCode}\n${mainCode}\n\n${constants}`,
+    resourceDependencies,
+  };
 }
 
 /** * EXHAUSTIVE EXPRESSION TRANSLATION

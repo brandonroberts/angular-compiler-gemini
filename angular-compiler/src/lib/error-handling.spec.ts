@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compile } from './compile';
+import { compileCode as compile } from './test-helpers';
 
 describe('Error Handling', () => {
   it('unknown decorator passes through unchanged', () => {

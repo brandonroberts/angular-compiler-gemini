@@ -19,6 +19,8 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
   const dependents = new Map<string, Set<string>>(); // className → set of files that import it
+  // Track external resource → parent .ts file for reload on resource change
+  const resourceToSource = new Map<string, string>(); // resource path → .ts file path
 
   function scanDirectory(dir: string) {
     if (!fs.existsSync(dir)) return;
@@ -75,11 +77,25 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
         }
       },
       handler(code, id) {
-        return { code: compile(code, id, registry) };
+        const result = compile(code, id, registry);
+        // Track resource dependencies for file watching
+        for (const dep of result.resourceDependencies) {
+          resourceToSource.set(dep, id);
+        }
+        return { code: result.code };
       }
     },
 
     handleHotUpdate({ file, server, modules }) {
+      // When an external template/style file changes, invalidate the parent .ts module
+      const parentSource = resourceToSource.get(file);
+      if (parentSource) {
+        const parentModule = server.moduleGraph.getModuleById(parentSource);
+        if (parentModule) {
+          return [parentModule];
+        }
+      }
+
       if (!file.endsWith('.ts')) return;
 
       const code = fs.readFileSync(file, 'utf-8');

@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import { scanFile, ComponentRegistry } from './registry';
+import { compile as rawCompile, CompileResult } from './compile';
 
 export function buildRegistry(files: Record<string, string>): ComponentRegistry {
   const registry: ComponentRegistry = new Map();
@@ -9,6 +10,11 @@ export function buildRegistry(files: Record<string, string>): ComponentRegistry 
     }
   }
   return registry;
+}
+
+/** Convenience wrapper: compile and return just the code string. */
+export function compileCode(sourceCode: string, fileName: string, registry?: ComponentRegistry): string {
+  return rawCompile(sourceCode, fileName, registry).code;
 }
 
 export function expectCompiles(result: string) {

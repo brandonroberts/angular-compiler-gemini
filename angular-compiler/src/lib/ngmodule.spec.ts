@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compile } from './compile';
+import { compileCode as compile } from './test-helpers';
 import { expectCompiles, buildRegistry } from './test-helpers';
 
 describe('@NgModule', () => {
