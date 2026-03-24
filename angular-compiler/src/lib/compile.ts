@@ -66,9 +66,10 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
 
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     return (rootNode) => {
+      let anonCounter = 0;
       const visitor = (node: ts.Node): ts.Node => {
-        if (ts.isClassDeclaration(node) && node.name) {
-          const className = node.name.text;
+        if (ts.isClassDeclaration(node)) {
+          const className = node.name?.text || `_AnonymousClass${anonCounter++}`;
           const decorators = ts.getDecorators(node);
           if (!decorators || decorators.length === 0) return ts.visitEachChild(node, visitor, context);
 
@@ -138,13 +139,12 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   const selector = registryEntry?.selector ?? localSelectors.get(depClassName);
                   const kind = registryEntry?.kind === 'pipe' ? 1 : 0; // 0=Directive, 1=Pipe
 
-                  if (!selector) {
-                    console.warn(`[angular-compiler] Could not resolve selector for "${depClassName}" in ${fileName}`);
-                  }
-
+                  // Unresolved dependencies (e.g. library components like RouterOutlet)
+                  // use a non-matching selector so they don't affect template instructions
+                  // but still appear in the dependencies array for runtime resolution.
                   declarations.push({
                     type: dep,
-                    selector: selector || depClassName.toLowerCase(),
+                    selector: selector || `_unresolved-${depClassName}`,
                     kind,
                     ...(kind === 1 ? { name: registryEntry?.pipeName } : {})
                   });
@@ -320,7 +320,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
           return ts.factory.updateClassDeclaration(
             node,
             node.modifiers?.filter(m => !ts.isDecorator(m) || !angularDecSet.has(m)),
-            node.name,
+            node.name || ts.factory.createIdentifier(className),
             node.typeParameters,
             node.heritageClauses,
             [...node.members, ...ivyProps]
@@ -373,10 +373,17 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
       case 'encapsulation': meta.encapsulation = valText.includes('None') ? 2 : (valText.includes('ShadowDom') ? 3 : 0); break;
       case 'preserveWhitespaces': meta.preserveWhitespaces = valText === 'true'; break;
       case 'pure': case 'standalone': meta[key] = valText !== 'false'; break;
-      case 'exportAs': meta.exportAs = [valText.replace(/['"`]/g, '')]; break;
-      case 'templateUrl': meta.templateUrl = valText.replace(/['"`]/g, ''); break;
-      case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
-      case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => e.getText().replace(/['"`]/g, '')); break;
+      case 'template': case 'selector': case 'name': case 'exportAs': case 'templateUrl': case 'providedIn':
+        // Extract the actual string content, preserving internal quotes
+        if (ts.isStringLiteral(valNode) || ts.isNoSubstitutionTemplateLiteral(valNode)) {
+          meta[key] = valNode.text;
+        } else {
+          meta[key] = valText.replace(/['"`]/g, '');
+        }
+        if (key === 'exportAs') meta.exportAs = [meta.exportAs];
+        break;
+      case 'styleUrls': if (ts.isArrayLiteralExpression(valNode)) meta.styleUrls = valNode.elements.map(e => ts.isStringLiteral(e) ? e.text : e.getText().replace(/['"`]/g, '')); break;
+      case 'styles': if (ts.isArrayLiteralExpression(valNode)) meta.styles = valNode.elements.map(e => ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text : e.getText().replace(/['"`]/g, '')); break;
       case 'imports': case 'providers': case 'viewProviders': case 'animations': case 'rawImports': case 'declarations': case 'exports': case 'bootstrap': if (ts.isArrayLiteralExpression(valNode)) meta[key] = valNode.elements.map(e => new o.WrappedNodeExpr(e)); break;
       default: meta[key] = valText.replace(/['"`]/g, '');
     }

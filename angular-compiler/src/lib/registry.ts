@@ -36,9 +36,12 @@ export function scanFile(code: string, fileName: string): RegistryEntry[] {
   const { program } = parseSync(fileName, code);
 
   for (const node of program.body) {
-    // Handle both `class Foo {}` and `export class Foo {}`
-    const decl = node.type === 'ExportNamedDeclaration' ? (node as any).declaration : node;
-    if (!decl || decl.type !== 'ClassDeclaration' || !decl.id?.name) continue;
+    // Handle `class Foo {}`, `export class Foo {}`, and `export default class Foo {}`
+    const decl = (node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration')
+      ? (node as any).declaration : node;
+    if (!decl || decl.type !== 'ClassDeclaration') continue;
+    // Skip anonymous default exports (no name to register)
+    if (!decl.id?.name) continue;
 
     const className: string = decl.id.name;
     const decorators: any[] = decl.decorators || [];
