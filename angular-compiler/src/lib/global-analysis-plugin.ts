@@ -5,7 +5,57 @@ import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
 import { compile } from './compile';
 
+import type { RegistryEntry } from './registry';
+
 const DECORATOR_RE = /@(Component|Directive|Pipe|Injectable|NgModule)/;
+
+/**
+ * Generate HMR code using Angular's ɵɵreplaceMetadata.
+ *
+ * The applyMetadata callback re-defines ɵcmp and ɵfac on the old class
+ * by copying from the newly compiled class in the hot-updated module.
+ * ɵɵreplaceMetadata then merges the old/new definitions and recreates
+ * matching LViews in the component tree.
+ *
+ * Falls back to page reload if ɵɵreplaceMetadata throws.
+ */
+function generateHmrCode(components: RegistryEntry[]): string {
+  // Export applyMetadata functions so the accept callback can access them
+  const applyFns = components.map(c => `
+export function ɵhmr_${c.className}(type, namespaces) {
+  type.ɵcmp = ${c.className}.ɵcmp;
+  type.ɵfac = ${c.className}.ɵfac;
+}`).join('\n');
+
+  const replaceBlocks = components.map(c => `
+      try {
+        i0.ɵɵreplaceMetadata(
+          ${c.className},
+          newModule.ɵhmr_${c.className},
+          { i0 },
+          [],
+          import.meta,
+          "${c.className}"
+        );
+        replaced = true;
+      } catch(e) {
+        // ɵɵreplaceMetadata failed — will fall back to page reload
+      }`
+  ).join('\n');
+
+  return `\n${applyFns}
+if (import.meta.hot) {
+  import.meta.hot.accept((newModule) => {
+    if (!newModule) return;
+    let replaced = false;${replaceBlocks}
+    if (!replaced) {
+      // Fallback: if no component was successfully replaced (e.g. root component),
+      // trigger a full page reload
+      import.meta.hot.invalidate('Component HMR failed, reloading');
+    }
+  });
+}`;
+}
 
 /**
  * Vite plugin that performs global analysis across all Angular source files,
@@ -22,6 +72,7 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
   // Track external resource → parent .ts file for reload on resource change
   const resourceToSource = new Map<string, string>(); // resource path → .ts file path
   let resolvedConfig: ResolvedConfig;
+  let isServe = false;
 
   /**
    * Extract styleUrl/styleUrls from source, read and preprocess them via Vite.
@@ -91,6 +142,10 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
     name: 'vite-angular-global-analysis',
     enforce: 'pre',
 
+    config(_config, { command }) {
+      isServe = command === 'serve';
+    },
+
     configResolved(config) {
       resolvedConfig = config;
     },
@@ -128,7 +183,19 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
         for (const dep of result.resourceDependencies) {
           resourceToSource.set(dep, id);
         }
-        return { code: result.code, map: result.map };
+
+        let outputCode = result.code;
+
+        // Append HMR code in dev mode for component files
+        if (isServe) {
+          const entries = scanFile(code, id);
+          const components = entries.filter(e => e.kind === 'component');
+          if (components.length > 0) {
+            outputCode += generateHmrCode(components);
+          }
+        }
+
+        return { code: outputCode, map: result.map };
       }
     },
 
