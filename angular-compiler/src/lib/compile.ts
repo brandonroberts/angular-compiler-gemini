@@ -23,6 +23,16 @@ import { ComponentRegistry } from './registry';
 
 const translator = new AstTranslator();
 
+/** Detect installed Angular major version for compatibility. Supports 19+. */
+const ANGULAR_MAJOR = (() => {
+  try {
+    const { VERSION } = require('@angular/compiler');
+    return parseInt(VERSION?.major, 10) || 21;
+  } catch {
+    return 21;
+  }
+})();
+
 /**
  * COMPLETE EXHAUSTIVE ANGULAR LITE COMPILER
  * Translates Angular Decorators + Signals to Ivy Static Definitions.
@@ -166,7 +176,7 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   return '';
                 }
 
-                const cmp = compileComponentFromMetadata({
+                const componentMeta: any = {
                   ...meta,
                   name: className,
                   type: classRef,
@@ -178,7 +188,6 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                     preserveWhitespaces: parsedTemplate.preserveWhitespaces
                   },
                   styles: meta.styles,
-                  externalStyles: res.styleSymbols.map(s => new o.ReadVarExpr(s)),
                   inputs: ivyInputs,
                   outputs: { ...meta.outputs, ...sigs.outputs },
                   viewQueries: sigs.viewQueries,
@@ -191,7 +200,6 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   viewProviders: meta.viewProviders,
                   animations: meta.animations,
                   isStandalone: meta.standalone,
-                  hasDirectiveDependencies: declarations.length > 0,
                   imports: meta.imports,
                   lifecycle: { usesOnChanges: false },
                   defer: {
@@ -204,7 +212,22 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
                   },
                   declarationListEmitMode: 0, // Direct
                   relativeContextFilePath: fileName,
-                }, constantPool, bindingParser);
+                };
+
+                // Angular 20+: hasDirectiveDependencies controls Full vs DomOnly template mode
+                if (ANGULAR_MAJOR >= 20) {
+                  componentMeta.hasDirectiveDependencies = declarations.length > 0;
+                }
+
+                // Angular 21+: externalStyles for styleUrl imports (skip CSS processing)
+                if (ANGULAR_MAJOR >= 21) {
+                  componentMeta.externalStyles = res.styleSymbols.map(s => new o.ReadVarExpr(s));
+                } else if (res.styleSymbols.length > 0) {
+                  // Angular 19-20: append styleUrl imports as regular styles
+                  componentMeta.styles = [...meta.styles, ...res.styleSymbols];
+                }
+
+                const cmp = compileComponentFromMetadata(componentMeta, constantPool, bindingParser);
 
                 const cmpExpr = cmp.expression;
                 if (res.templateVar && cmpExpr instanceof o.LiteralMapExpr) {
