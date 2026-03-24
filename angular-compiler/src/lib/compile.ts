@@ -2,6 +2,7 @@ import * as ts from 'typescript';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as o from '@angular/compiler';
+import MagicString from 'magic-string';
 import {
   ConstantPool,
   compileComponentFromMetadata,
@@ -45,6 +46,8 @@ const ANGULAR_MAJOR = (() => {
  */
 export interface CompileResult {
   code: string;
+  /** Source map for the transformation */
+  map: any;
   /** Absolute paths of external resources (templateUrl, styleUrl) read during compilation */
   resourceDependencies: string[];
 }
@@ -429,8 +432,24 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
   const mainCode = printer.printFile(result.transformed[0]);
   const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, sourceFile)).join('\n');
 
+  const outputCode = `${resourceCode}\n${mainCode}\n\n${constants}`;
+
+  // Generate source map using MagicString.
+  // Since ts.Printer produces a new string, we use overwrite on the
+  // original source to create a mapping. MagicString tracks the
+  // relationship between original and generated positions.
+  const ms = new MagicString(sourceCode, { filename: fileName });
+  ms.overwrite(0, sourceCode.length, outputCode);
+  const map = ms.generateMap({
+    source: fileName,
+    file: fileName + '.js',
+    includeContent: true,
+    hires: 'boundary',
+  });
+
   return {
-    code: `${resourceCode}\n${mainCode}\n\n${constants}`,
+    code: outputCode,
+    map,
     resourceDependencies,
   };
 }

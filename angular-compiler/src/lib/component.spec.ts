@@ -31,6 +31,17 @@ describe('@Component', () => {
     expect(result).toContain('ɵsetClassMetadata');
     expect(result).toMatch(/typeof ngDevMode === "undefined" \|\| ngDevMode/);
     expect(result).not.toContain('i0.ngDevMode');
+    // Source map generated
+    const fullResult = rawCompile(`
+      import { Component, signal } from '@angular/core';
+      @Component({ selector: 'app-hello', template: '<h1>Hello</h1>' })
+      export class HelloComponent { title = signal('World'); }
+    `, 'hello.ts');
+    expect(fullResult.map).toBeDefined();
+    expect(fullResult.map.version).toBe(3);
+    expect(fullResult.map.sources).toContain('hello.ts');
+    expect(fullResult.map.sourcesContent).toBeDefined();
+    expect(fullResult.map.mappings).toBeTruthy();
     // Template function emitted
     expect(result).toMatch(/template:\s*\(rf, ctx\)/);
     // Text interpolation instruction

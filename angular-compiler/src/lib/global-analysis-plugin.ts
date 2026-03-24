@@ -128,7 +128,7 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
         for (const dep of result.resourceDependencies) {
           resourceToSource.set(dep, id);
         }
-        return { code: result.code };
+        return { code: result.code, map: result.map };
       }
     },
 
