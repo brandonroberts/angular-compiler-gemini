@@ -1,4 +1,4 @@
-import * as ts from 'typescript';
+import { parseSync } from 'oxc-parser';
 
 export interface RegistryEntry {
   /** CSS selector for components/directives, pipe name for pipes, class name for NgModules */
@@ -18,65 +18,70 @@ export interface RegistryEntry {
 /** Maps class name → registry entry */
 export type ComponentRegistry = Map<string, RegistryEntry>;
 
+const ANGULAR_DECORATORS = new Set(['Component', 'Directive', 'Pipe', 'NgModule']);
+const DECORATOR_RE = /@(Component|Directive|Pipe|NgModule)/;
+
 /**
  * Lightweight scan of a TypeScript file to extract Angular decorator metadata
- * without performing full compilation. Used by the global analysis plugin
- * to build the registry before single-file compilation.
+ * without performing full compilation. Uses OXC's native Rust parser for speed.
  */
 export function scanFile(code: string, fileName: string): RegistryEntry[] {
   const entries: RegistryEntry[] = [];
 
-  if (!/@(Component|Directive|Pipe|NgModule)/.test(code)) {
+  // Fast regex pre-filter before parsing
+  if (!DECORATOR_RE.test(code)) {
     return entries;
   }
 
-  const sourceFile = ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, true);
+  const { program } = parseSync(fileName, code);
 
-  for (const stmt of sourceFile.statements) {
-    if (!ts.isClassDeclaration(stmt) || !stmt.name) continue;
+  for (const node of program.body) {
+    // Handle both `class Foo {}` and `export class Foo {}`
+    const decl = node.type === 'ExportNamedDeclaration' ? (node as any).declaration : node;
+    if (!decl || decl.type !== 'ClassDeclaration' || !decl.id?.name) continue;
 
-    const decorators = ts.getDecorators(stmt);
-    if (!decorators || decorators.length === 0) continue;
+    const className: string = decl.id.name;
+    const decorators: any[] = decl.decorators || [];
 
     for (const dec of decorators) {
-      if (!ts.isCallExpression(dec.expression)) continue;
+      const expr = dec.expression;
+      if (!expr || expr.type !== 'CallExpression') continue;
 
-      const decoratorName = dec.expression.expression.getText(sourceFile);
-      if (!['Component', 'Directive', 'Pipe', 'NgModule'].includes(decoratorName)) continue;
+      const decoratorName: string = expr.callee?.name;
+      if (!ANGULAR_DECORATORS.has(decoratorName)) continue;
 
-      const args = dec.expression.arguments;
-      if (args.length === 0 || !ts.isObjectLiteralExpression(args[0])) continue;
+      const arg = expr.arguments?.[0];
+      if (!arg || arg.type !== 'ObjectExpression') continue;
 
-      const obj = args[0] as ts.ObjectLiteralExpression;
       let selector: string | undefined;
       let pipeName: string | undefined;
       let moduleExports: string[] | undefined;
 
-      for (const prop of obj.properties) {
-        if (!ts.isPropertyAssignment(prop)) continue;
-        const key = prop.name.getText(sourceFile).replace(/['"`]/g, '');
-        const val = prop.initializer;
+      for (const prop of arg.properties) {
+        if (prop.type !== 'Property') continue;
+        const key: string = prop.key?.name || prop.key?.value;
+        const val = prop.value;
 
-        if (key === 'selector' && ts.isStringLiteral(val)) {
-          selector = val.text;
+        if (key === 'selector' && val?.type === 'Literal' && typeof val.value === 'string') {
+          selector = val.value;
         }
-        if (key === 'name' && ts.isStringLiteral(val) && decoratorName === 'Pipe') {
-          pipeName = val.text;
+        if (key === 'name' && val?.type === 'Literal' && typeof val.value === 'string' && decoratorName === 'Pipe') {
+          pipeName = val.value;
         }
-        if (key === 'exports' && ts.isArrayLiteralExpression(val) && decoratorName === 'NgModule') {
+        if (key === 'exports' && val?.type === 'ArrayExpression' && decoratorName === 'NgModule') {
           moduleExports = val.elements
-            .filter(ts.isIdentifier)
-            .map(e => e.getText(sourceFile));
+            .filter((e: any) => e?.type === 'Identifier')
+            .map((e: any) => e.name);
         }
       }
 
       if (decoratorName === 'NgModule') {
         entries.push({
-          selector: stmt.name.text,
+          selector: className,
           kind: 'ngmodule',
           exports: moduleExports || [],
           fileName,
-          className: stmt.name.text,
+          className,
         });
       } else if (decoratorName === 'Pipe' && pipeName) {
         entries.push({
@@ -84,14 +89,14 @@ export function scanFile(code: string, fileName: string): RegistryEntry[] {
           kind: 'pipe',
           pipeName,
           fileName,
-          className: stmt.name.text,
+          className,
         });
       } else if (selector) {
         entries.push({
           selector: selector.split(',')[0].trim(),
           kind: decoratorName === 'Component' ? 'component' : 'directive',
           fileName,
-          className: stmt.name.text,
+          className,
         });
       }
     }
