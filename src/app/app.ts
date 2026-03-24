@@ -2,18 +2,13 @@ import { Component } from '@angular/core';
 
 import { Counter } from './counter';
 import { Todos } from './todos';
+import { RouterOutlet } from '@angular/router';
 
 @Component({
   selector: 'app-root',
   template: `
-    <h1>Angular</h1>
-
-    <app-counter [name]="'Brandon'"></app-counter>
-
-    <hr>
-
-    <app-todos></app-todos>
+    <router-outlet />
   `,
-  imports: [Counter, Todos],
+  imports: [RouterOutlet],
 })
 export class App {}
