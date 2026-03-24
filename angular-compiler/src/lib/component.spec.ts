@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { compileCode as compile, expectCompiles } from './test-helpers';
 import { compile as rawCompile } from './compile';
+import { scanFile } from './registry';
 
 describe('@Component', () => {
   it('compiles a component with template and styles', () => {
@@ -417,6 +418,45 @@ describe('@Component', () => {
       expectCompiles(result);
       expect(result).toContain('ɵɵdefer');
       expect(result).toContain('ɵɵdeferOnTimer');
+    });
+
+    it('generates lazy import() for defer-only components', () => {
+
+      const heavySrc = `
+        import { Component } from '@angular/core';
+        @Component({ selector: 'heavy-widget', template: '<p>Heavy</p>' })
+        export class HeavyWidget {}
+      `;
+
+      const registry = new Map();
+      for (const entry of scanFile(heavySrc, 'heavy.ts')) {
+        registry.set(entry.className, entry);
+      }
+
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        import { HeavyWidget } from './heavy-widget';
+        @Component({
+          selector: 'app-lazy-defer',
+          template: \`
+            <p>Eager</p>
+            @defer (on viewport) {
+              <heavy-widget />
+            } @placeholder {
+              <p>Loading...</p>
+            }
+          \`,
+          imports: [HeavyWidget]
+        })
+        export class LazyDeferComponent {}
+      `, 'lazy-defer.ts', { registry });
+
+      expectCompiles(result.code);
+      expect(result.code).toContain('ɵɵdefer');
+      // Dynamic import for lazy loading
+      expect(result.code).toContain('import("./heavy-widget")');
+      // Dependency function generated (not null)
+      expect(result.code).toContain('DepsFn');
     });
   });
 
