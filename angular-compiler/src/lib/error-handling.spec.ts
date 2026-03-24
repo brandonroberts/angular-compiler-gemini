@@ -47,6 +47,36 @@ describe('Error Handling', () => {
     expect(result).toContain('ɵfac');
   });
 
+  it('selectorless component gets generated selector', () => {
+    const result = compile(`
+      import { Component } from '@angular/core';
+      @Component({ template: '<p>routed page</p>' })
+      export default class MyPage {}
+    `, 'my-page.ts');
+
+    expect(result).toContain('ɵcmp');
+    expect(result).toContain('ɵfac');
+    // Generated selector for runtime compatibility
+    expect(result).toContain('ng-component-mypage');
+    // Template still compiles
+    expect(result).toContain('ɵɵdomElementStart');
+  });
+
+  it('selectorless component with imports compiles', () => {
+    const result = compile(`
+      import { Component } from '@angular/core';
+      class ChildComponent {}
+      @Component({
+        template: '<p>page with imports</p>',
+        imports: [ChildComponent]
+      })
+      export default class RoutedPage {}
+    `, 'routed.ts');
+
+    expect(result).toContain('ɵcmp');
+    expect(result).toContain('ng-component-routedpage');
+  });
+
   it('component with invalid template returns empty', () => {
     // Unclosed tags should trigger parse errors
     const result = compile(`

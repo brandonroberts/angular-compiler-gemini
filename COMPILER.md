@@ -61,7 +61,7 @@ The compiler is split into two phases:
 
 | Property | Status |
 |---|---|
-| `selector` | Supported |
+| `selector` | Supported (auto-generated for selectorless routed components) |
 | `template` | Supported |
 | `templateUrl` | Supported (inlined at compile time) |
 | `styles` (array or string) | Supported (ShadowCss emulated encapsulation) |
@@ -237,7 +237,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-109 tests across 11 spec files:
+111 tests across 11 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -249,6 +249,6 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 | `ngmodule.spec.ts` | 3 | Compilation, providers, export resolution |
 | `registry.spec.ts` | 6 | All decorator types, multi-declaration, NgModule exports |
 | `global-analysis.spec.ts` | 5 | Cross-file component, pipe, directive resolution |
-| `error-handling.spec.ts` | 4 | Unknown decorators, undecorated classes, invalid templates |
+| `error-handling.spec.ts` | 6 | Unknown decorators, undecorated classes, selectorless components, invalid templates |
 | `compile.spec.ts` | 2 | Original smoke tests |
 | `app.spec.ts` | 1 | Application-level test |

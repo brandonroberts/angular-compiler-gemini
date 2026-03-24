@@ -111,6 +111,10 @@ export function compile(sourceCode: string, fileName: string, registry?: Compone
               case 'Component':
                 targetType = FactoryTarget.Component;
                 processResources();
+                // Angular runtime requires a selector even for routed components
+                if (!meta.selector) {
+                  meta.selector = `ng-component-${className.toLowerCase()}`;
+                }
 
                 // Resolve component dependencies by looking up selectors from the registry.
                 // The global analysis plugin provides the registry; falls back to file-local scan.
@@ -376,7 +380,7 @@ function extractMetadata(dec: ts.Decorator | undefined): any {
   if (!dec) return null;
   const call = dec.expression as ts.CallExpression;
   const obj = call.arguments[0] as ts.ObjectLiteralExpression;
-  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, selector: null, styles: [], templateUrl: null, styleUrls: [] };
+  const meta: any = { hostRaw: {}, inputs: {}, outputs: {}, standalone: true, imports: [], providers: null, viewProviders: null, animations: null, changeDetection: 1, encapsulation: 0, preserveWhitespaces: false, exportAs: null, selector: undefined, styles: [], templateUrl: null, styleUrls: [] };
   if (!obj) return meta;
   obj.properties.forEach(p => {
     if (!ts.isPropertyAssignment(p)) return;
