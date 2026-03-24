@@ -10,7 +10,8 @@ describe('NgLite Compiler', () => {
 
   it('detects model signals', () => {
     const result = compile(`@Component({ selector: 'x', template: '' }) class X { count = model(0); }`, 'x.ts');
-    expect(result).toContain('count: "count"');
+    // Signal model inputs use array descriptor format: [flags, publicName, className, transform]
+    expect(result).toContain('count: [');
     expect(result).toContain('countChange: "countChange"');
   });
 

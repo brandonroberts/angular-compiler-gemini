@@ -12,16 +12,18 @@ import {
   parseHostBindings
 } from '@angular/compiler';
 import { AstTranslator } from './ast-translator';
+import { ComponentRegistry } from './registry';
 
-// Global registry to store discovered selectors during the compilation pass
-const selectorRegistry = new Map<string, string>();
 const translator = new AstTranslator();
 
 /**
  * COMPLETE EXHAUSTIVE ANGULAR LITE COMPILER
  * Translates Angular Decorators + Signals to Ivy Static Definitions.
+ *
+ * @param registry - Optional external registry from the global analysis plugin.
+ *   When provided, used to resolve component/directive selectors for template compilation.
  */
-export function compile(sourceCode: string, fileName: string): string {
+export function compile(sourceCode: string, fileName: string, registry?: ComponentRegistry): string {
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
@@ -29,13 +31,13 @@ export function compile(sourceCode: string, fileName: string): string {
   // Inject 'import * as i0 from "@angular/core"'
   sourceFile = injectAngularImport(sourceFile);
 
-  // Pass 1: Discover selectors in this file to populate the registry
+  // Build a file-local selector map as fallback when no external registry is provided
+  const localSelectors = new Map<string, string>();
   sourceFile.statements.forEach(stmt => {
     if (ts.isClassDeclaration(stmt) && stmt.name) {
       const meta = extractMetadata(ts.getDecorators(stmt)?.[0]);
-      // console.log(stmt.name.text, meta.selector);
       if (meta?.selector) {
-        selectorRegistry.set(stmt.name.text, meta.selector.split(',')[0].trim());
+        localSelectors.set(stmt.name.text, meta.selector.split(',')[0].trim());
       }
     }
   });
@@ -78,22 +80,25 @@ export function compile(sourceCode: string, fileName: string): string {
                 const res = processResources(meta, className);
                 fileResourceImports.push(...res.imports);
 
-                // Prepare component dependencies for standalone components
-                // 1. Map imports to R3TemplateDependency metadata.
-                // This is the "Linking" phase where we associate the class reference 
-                // with the string-based selector used in the template.
-                // Inside case 'Component' in compile.ts
+                // Resolve component dependencies by looking up selectors from the registry.
+                // The global analysis plugin provides the registry; falls back to file-local scan.
                 const declarations = (Array.isArray(meta.imports) ? meta.imports : []).map(dep => {
-                  // Extract the class name from the WrappedNodeExpr
-                  const className = dep.node.getText(); 
-                  
-                  // Retrieve the selector we found during Pass 1
-                  const selector = selectorRegistry.get(className);
+                  const depClassName = dep.node.getText();
+
+                  // Try external registry first, then file-local fallback
+                  const registryEntry = registry?.get(depClassName);
+                  const selector = registryEntry?.selector ?? localSelectors.get(depClassName);
+                  const kind = registryEntry?.kind === 'pipe' ? 1 : 0; // 0=Directive, 1=Pipe
+
+                  if (!selector) {
+                    console.warn(`[angular-compiler] Could not resolve selector for "${depClassName}" in ${fileName}`);
+                  }
 
                   return {
-                    type: dep,     // The Class Reference
-                    selector: selector || 'app-counter', // The DOM Selector (e.g., 'app-child')
-                    kind: 0        // R3TemplateDependencyKind.Directive (covers Components too)
+                    type: dep,
+                    selector: selector || depClassName.toLowerCase(),
+                    kind,
+                    ...(kind === 1 ? { name: registryEntry?.pipeName } : {})
                   };
                 });
 
@@ -146,6 +151,7 @@ export function compile(sourceCode: string, fileName: string): string {
                   viewProviders: meta.viewProviders,
                   animations: meta.animations,
                   isStandalone: meta.standalone,
+                  hasDirectiveDependencies: declarations.length > 0,
                   imports: meta.imports,
                   lifecycle: { usesOnChanges: false },
                   defer: {

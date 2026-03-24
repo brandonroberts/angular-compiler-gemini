@@ -1,7 +1,7 @@
 /// <reference types="vitest" />
 
 import { defineConfig, DepOptimizationConfig } from 'vite';
-import { compile } from './angular-compiler/src/lib/compile';
+import { globalAnalysisPlugin } from './angular-compiler/src/lib/global-analysis-plugin';
 import { JavaScriptTransformer } from '@angular/build/private';
 
 type EsbuildOptions = NonNullable<DepOptimizationConfig['esbuildOptions']>;
@@ -39,29 +39,7 @@ export default defineConfig(({ mode }) => ({
     mainFields: ['module'],
   },
   plugins: [
-    {
-      name: 'vite-angular-compiler',
-      enforce: 'pre',
-      transform: {
-        filter: {
-          id: /.ts$/,
-          code: {
-            include: [
-              /@(Component|Directive|Pipe|Injectable|NgModule)/
-            ]
-          }
-        },
-        handler(code, id) {
-          const result = compile(code, id);
-          
-          return {
-            // Hacks because we lack global analysis currently,
-            // so components are treated as elements with props
-            code: result.replace('ɵɵdomElement(', 'ɵɵelement(').replace('i0.ɵɵdomProperty("name", ctx.Brandon)', 'i0.ɵɵproperty("name", "Brandon")')
-          }
-        }
-      }
-    }
+    globalAnalysisPlugin(['src']),
   ],
   test: {
     globals: true,
