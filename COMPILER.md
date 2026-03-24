@@ -51,11 +51,35 @@ The compiler is split into two phases:
 
 | Decorator | Static Fields | Notes |
 |---|---|---|
-| `@Component` | `ɵcmp`, `ɵfac` | Full template compilation with Ivy instructions |
-| `@Directive` | `ɵdir`, `ɵfac` | Host bindings, listeners, inputs/outputs |
-| `@Pipe` | `ɵpipe`, `ɵfac` | Pure and impure |
-| `@Injectable` | `ɵprov`, `ɵfac` | `providedIn` variants |
-| `@NgModule` | `ɵmod`, `ɵinj`, `ɵfac` | Declarations, exports, providers, bootstrap |
+| `@Component` | `ɵcmp`, `ɵfac`, `setClassMetadata` | Full template compilation with Ivy instructions |
+| `@Directive` | `ɵdir`, `ɵfac`, `setClassMetadata` | Host bindings, listeners, inputs/outputs |
+| `@Pipe` | `ɵpipe`, `ɵfac`, `setClassMetadata` | Pure and impure |
+| `@Injectable` | `ɵprov`, `ɵfac`, `setClassMetadata` | `providedIn` variants |
+| `@NgModule` | `ɵmod`, `ɵinj`, `ɵfac`, `setClassMetadata` | Declarations, exports, providers, bootstrap |
+
+### Field Decorators
+
+| Decorator | Supported |
+|---|---|
+| `@Input()` / `@Input('alias')` / `@Input({ required, transform })` | Yes |
+| `@Output()` / `@Output('alias')` | Yes |
+| `@ViewChild(pred, opts)` / `@ViewChildren(pred, opts)` | Yes |
+| `@ContentChild(pred, opts)` / `@ContentChildren(pred, opts)` | Yes |
+| `@HostBinding('prop')` | Yes |
+| `@HostListener('event', ['$event'])` | Yes |
+
+### Dependency Injection
+
+| Feature | Supported |
+|---|---|
+| Constructor parameter injection | Yes (type annotations as tokens) |
+| `@Inject(TOKEN)` | Yes |
+| `@Optional()` | Yes |
+| `@Self()` / `@SkipSelf()` / `@Host()` | Yes |
+| `@Attribute('name')` | Yes |
+| Type-only imports (`import type`) | Detected → `ɵɵinvalidFactory` |
+| Class inheritance without constructor | `ɵɵgetInheritedFactory` |
+| `forwardRef(() => X)` unwrapping | Yes (in imports, providers, queries) |
 
 ### @Component API Coverage
 
@@ -241,7 +265,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-115 tests across 11 spec files:
+139 tests across 13 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -253,6 +277,8 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 | `ngmodule.spec.ts` | 3 | Compilation, providers, export resolution |
 | `registry.spec.ts` | 6 | All decorator types, multi-declaration, NgModule exports |
 | `global-analysis.spec.ts` | 5 | Cross-file component, pipe, directive resolution |
-| `error-handling.spec.ts` | 6 | Unknown decorators, undecorated classes, selectorless components, invalid templates |
+| `decorator-fields.spec.ts` | 15 | @Input, @Output, @ViewChild, @ContentChild, @HostBinding, @HostListener field decorators |
+| `constructor-di.spec.ts` | 8 | Constructor DI: @Inject, @Optional, inheritance, union types, multiple params |
+| `error-handling.spec.ts` | 7 | Unknown decorators, undecorated classes, selectorless components, forwardRef, invalid templates |
 | `compile.spec.ts` | 2 | Original smoke tests |
 | `app.spec.ts` | 1 | Application-level test |

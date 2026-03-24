@@ -239,6 +239,11 @@ describe('AstTranslator', () => {
       expect(printExpr(expr)).toBe('i0.ɵɵdefineComponent');
     });
 
+    it('translates ngDevMode as global identifier', () => {
+      const expr = new o.ExternalExpr({ name: 'ngDevMode', moduleName: '@angular/core' });
+      expect(printExpr(expr)).toBe('ngDevMode');
+    });
+
     it('throws for non-core ExternalExpr', () => {
       const expr = new o.ExternalExpr({ name: 'something', moduleName: '@angular/common' });
       expect(() => printExpr(expr)).toThrow('Unsupported external module reference');

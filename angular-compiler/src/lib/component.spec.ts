@@ -26,6 +26,10 @@ describe('@Component', () => {
     expect(result).toContain('import * as i0 from "@angular/core"');
     // Factory function is correct
     expect(result).toContain('new (__ngFactoryType__ || HelloComponent)()');
+    // setClassMetadata emitted with global ngDevMode (not i0.ngDevMode)
+    expect(result).toContain('ɵsetClassMetadata');
+    expect(result).toMatch(/typeof ngDevMode === "undefined" \|\| ngDevMode/);
+    expect(result).not.toContain('i0.ngDevMode');
     // Template function emitted
     expect(result).toMatch(/template:\s*\(rf, ctx\)/);
     // Text interpolation instruction
