@@ -172,7 +172,18 @@ The compiler generates V3 source maps via `magic-string` that map the compiled o
 
 ### Style Preprocessing
 
-External styles (`.scss`, `.sass`, `.less`, `.styl`) are preprocessed via Vite's `preprocessCSS` API before inlining. The global analysis plugin's async transform handler resolves and compiles style files, then passes the CSS to the compiler via the `resolvedStyles` option. This uses whatever CSS preprocessor Vite has configured (Sass, Less, Stylus) — no additional dependencies needed.
+Both external and inline styles are preprocessed via Vite's `preprocessCSS` API:
+
+- **External styles** (`.scss`, `.sass`, `.less`, `.styl` via `styleUrl`/`styleUrls`): read, preprocessed, and passed to the compiler via `resolvedStyles`
+- **Inline styles** (`styles: [...]` or `styles: \`...\``): extracted via TypeScript AST, preprocessed, and passed via `resolvedInlineStyles`
+
+The `inlineStyleLanguage` option (default: `'scss'`) controls the file extension used for inline style preprocessing. Set to `'css'` to disable inline preprocessing.
+
+```ts
+globalAnalysisPlugin({ srcDirs: ['src'], inlineStyleLanguage: 'scss' })
+```
+
+Preprocessed styles are cached by mtime for fast HMR re-compilation. Note: `setClassMetadata` preserves original decorator args including raw SCSS — this is correct behavior (metadata only, not applied as CSS).
 
 ### File Watching
 
@@ -306,7 +317,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-141 tests across 13 spec files:
+145 tests across 13 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|

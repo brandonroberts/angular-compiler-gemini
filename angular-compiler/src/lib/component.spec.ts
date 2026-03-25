@@ -786,6 +786,60 @@ describe('@Component', () => {
       expect(result).toContain('$primary');
     });
 
+    it('applies resolvedInlineStyles to array styles before ShadowCss', () => {
+      const compiledCss = ':host { display: block; } .wrapper { padding: 1rem; }';
+      const resolvedInlineStyles = new Map([[0, compiledCss]]);
+
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-inline-scss',
+          template: '<p>hi</p>',
+          styles: [':host { display: block; } .wrapper { padding: $var; }']
+        })
+        export class InlineScssComponent {}
+      `, 'inline-scss.ts', { resolvedInlineStyles });
+
+      // Preprocessed CSS used in ɵcmp styles (ShadowCss applied)
+      expect(result.code).toContain('padding: 1rem');
+      expect(result.code).toContain('_nghost-%COMP%');
+      // Note: $var still appears in setClassMetadata (preserves original decorator args)
+    });
+
+    it('applies resolvedInlineStyles to singular string style', () => {
+      const compiledCss = ':host { color: red; } h1 { font-size: 2rem; }';
+      const resolvedInlineStyles = new Map([[0, compiledCss]]);
+
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-singular-scss',
+          template: '<h1>hi</h1>',
+          styles: \`:host { color: $primary; } h1 { @include heading; }\`
+        })
+        export class SingularScssComponent {}
+      `, 'singular-scss.ts', { resolvedInlineStyles });
+
+      // Preprocessed CSS used in ɵcmp styles
+      expect(result.code).toContain('font-size: 2rem');
+      expect(result.code).toContain('_nghost-%COMP%');
+    });
+
+    it('leaves inline styles untouched when no resolvedInlineStyles', () => {
+      const result = rawCompile(`
+        import { Component } from '@angular/core';
+        @Component({
+          selector: 'app-plain',
+          template: '<p>hi</p>',
+          styles: [':host { color: red; }']
+        })
+        export class PlainComponent {}
+      `, 'plain.ts');
+
+      expect(result.code).toContain('color: red');
+      expect(result.code).toContain('_nghost-%COMP%');
+    });
+
     it('inlines both templateUrl and styleUrls together', () => {
       const result = compile(`
         import { Component } from '@angular/core';
