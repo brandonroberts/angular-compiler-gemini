@@ -56,6 +56,8 @@ export interface CompileOptions {
   registry?: ComponentRegistry;
   /** Pre-resolved style contents keyed by absolute file path (e.g. SCSS already compiled to CSS). */
   resolvedStyles?: Map<string, string>;
+  /** Pre-processed inline styles (index in styles array → compiled CSS). */
+  resolvedInlineStyles?: Map<number, string>;
 }
 
 export function compile(sourceCode: string, fileName: string, optionsOrRegistry?: CompileOptions | ComponentRegistry): CompileResult {
@@ -63,6 +65,7 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
   const opts: CompileOptions = optionsOrRegistry instanceof Map ? { registry: optionsOrRegistry } : (optionsOrRegistry || {});
   const registry = opts.registry;
   const resolvedStyles = opts.resolvedStyles;
+  const resolvedInlineStyles = opts.resolvedInlineStyles;
   let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
@@ -203,6 +206,16 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
                       resourceDependencies.push(stylePath);
                     } catch {
                       console.warn(`[angular-compiler] Could not read style file "${url}" for ${className}`);
+                    }
+                  }
+                }
+
+                // Apply pre-processed inline styles (SCSS→CSS from plugin)
+                // Must happen before compileComponentFromMetadata which runs ShadowCss
+                if (resolvedInlineStyles) {
+                  for (const [idx, css] of resolvedInlineStyles) {
+                    if (idx < meta.styles.length) {
+                      meta.styles[idx] = css;
                     }
                   }
                 }
