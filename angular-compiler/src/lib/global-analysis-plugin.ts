@@ -130,31 +130,37 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
     if (inlineStyleLanguage === 'css') return undefined;
     if (!code.includes('styles')) return undefined;
 
-    // Extract inline style strings using regex on the styles array
-    // Match styles: [`...`] or styles: ['...']
-    const stylesMatch = code.match(/styles\s*:\s*\[([\s\S]*?)\]/);
-    if (!stylesMatch) return undefined;
-
-    const stylesContent = stylesMatch[1];
-    // Extract individual style strings (backtick or quote delimited)
+    // Use TypeScript AST to reliably extract inline style strings
+    const ts = await import('typescript');
+    const sf = ts.createSourceFile(id, code, ts.ScriptTarget.Latest, true);
     const styleStrings: string[] = [];
-    const stringPattern = /[`'"]([^`'"]*(?:\n[^`'"]*)*)[`'"]/g;
-    let match;
-    while ((match = stringPattern.exec(stylesContent)) !== null) {
-      styleStrings.push(match[1]);
+
+    // Walk AST to find styles property in decorator arguments
+    function visit(node: any) {
+      if (ts.isPropertyAssignment(node) && node.name.getText(sf) === 'styles') {
+        const val = node.initializer;
+        if (ts.isArrayLiteralExpression(val)) {
+          for (const el of val.elements) {
+            if (ts.isStringLiteral(el) || ts.isNoSubstitutionTemplateLiteral(el)) {
+              styleStrings.push(el.text);
+            }
+          }
+        } else if (ts.isStringLiteral(val) || ts.isNoSubstitutionTemplateLiteral(val)) {
+          // styles: `...` (singular string)
+          styleStrings.push(val.text);
+        }
+      }
+      ts.forEachChild(node, visit);
     }
+    visit(sf);
 
     if (styleStrings.length === 0) return undefined;
 
     const result = new Map<number, string>();
     for (let i = 0; i < styleStrings.length; i++) {
-      const style = styleStrings[i];
-      // Check if this looks like SCSS (has variables, nesting, or & selectors)
-      if (!/\$\w|&\s*[{:]|[^}]\s*\{[^}]*\{/.test(style)) continue;
       try {
-        // Use .scss extension to tell Vite to preprocess as SCSS
         const fakePath = id.replace(/\.ts$/, `.inline-${i}.${inlineStyleLanguage}`);
-        const processed = await preprocessCSS(style, fakePath, resolvedConfig);
+        const processed = await preprocessCSS(styleStrings[i], fakePath, resolvedConfig);
         result.set(i, processed.code);
       } catch (e: any) {
         console.warn(`[angular-compiler] Inline style preprocessing failed in ${id}: ${e.message}`);
