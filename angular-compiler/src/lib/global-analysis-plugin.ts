@@ -65,7 +65,16 @@ if (import.meta.hot) {
  * Phase 2 (transform):  Pass the registry to compile() for each file.
  * HMR:                  Rescan changed files and invalidate dependents.
  */
-export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
+export interface AngularPluginOptions {
+  srcDirs?: string[];
+  /** File extension for inline style preprocessing. Default: 'scss'. Set to 'less', 'sass', 'styl', or 'css' (no preprocessing). */
+  inlineStyleLanguage?: 'scss' | 'sass' | 'less' | 'styl' | 'css';
+}
+
+export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = {}): Plugin {
+  const opts: AngularPluginOptions = Array.isArray(options) ? { srcDirs: options } : options;
+  const srcDirs = opts.srcDirs || ['src'];
+  const inlineStyleLanguage = opts.inlineStyleLanguage || 'scss';
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
   const dependents = new Map<string, Set<string>>(); // className → set of files that import it
@@ -118,6 +127,7 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
    * and runs them through Vite's preprocessCSS.
    */
   async function preprocessInlineStyles(code: string, id: string): Promise<Map<number, string> | undefined> {
+    if (inlineStyleLanguage === 'css') return undefined;
     if (!code.includes('styles')) return undefined;
 
     // Extract inline style strings using regex on the styles array
@@ -143,8 +153,8 @@ export function globalAnalysisPlugin(srcDirs: string[] = ['src']): Plugin {
       if (!/\$\w|&\s*[{:]|[^}]\s*\{[^}]*\{/.test(style)) continue;
       try {
         // Use .scss extension to tell Vite to preprocess as SCSS
-        const fakeScssPath = id.replace(/\.ts$/, `.inline-${i}.scss`);
-        const processed = await preprocessCSS(style, fakeScssPath, resolvedConfig);
+        const fakePath = id.replace(/\.ts$/, `.inline-${i}.${inlineStyleLanguage}`);
+        const processed = await preprocessCSS(style, fakePath, resolvedConfig);
         result.set(i, processed.code);
       } catch (e: any) {
         console.warn(`[angular-compiler] Inline style preprocessing failed in ${id}: ${e.message}`);
