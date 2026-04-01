@@ -1,7 +1,11 @@
 import { Plugin, ResolvedConfig, preprocessCSS } from 'vite';
+import * as vite from 'vite';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { availableParallelism } from 'node:os';
+import { createRequire } from 'node:module';
 import { readConfiguration } from '@angular/compiler-cli';
+import { JavaScriptTransformer } from '@angular/build/private';
 import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
 import { compile } from './compile';
@@ -73,7 +77,7 @@ export interface AngularPluginOptions {
   inlineStyleLanguage?: 'scss' | 'sass' | 'less' | 'styl' | 'css';
 }
 
-export function angular(options: AngularPluginOptions = {}): Plugin {
+export function angular(options: AngularPluginOptions = {}): Plugin[] {
   const opts = options;
   const inlineStyleLanguage = opts.inlineStyleLanguage || 'scss';
   const registry: ComponentRegistry = new Map();
@@ -200,8 +204,10 @@ export function angular(options: AngularPluginOptions = {}): Plugin {
     }
   }
 
-  return {
-    name: 'vite-angular-global-analysis',
+  const maxWorkers = Math.max(1, availableParallelism() - 1);
+
+  const mainPlugin: Plugin = {
+    name: 'angular-compiler',
     enforce: 'pre',
 
     config(_config, { command }) {
@@ -324,4 +330,123 @@ export function angular(options: AngularPluginOptions = {}): Plugin {
       }
     }
   };
+
+  // --- Internal plugins for Angular library processing ---
+
+  // Load LmdbCacheStore for build optimizer caching (optional)
+  let LmdbCacheStore: any;
+  try {
+    const req = createRequire(import.meta.url);
+    const buildRequire = createRequire(req.resolve('@angular/build/private'));
+    ({ LmdbCacheStore } = buildRequire('../src/tools/esbuild/lmdb-cache-store'));
+  } catch { /* not available */ }
+
+  /**
+   * Transforms @angular/* FESM modules for production builds.
+   * Applies advanced optimizations and tree-shaking annotations.
+   */
+  function buildOptimizerPlugin(): Plugin[] {
+    let cacheStore: any;
+    let cache: unknown;
+
+    if (LmdbCacheStore && !process.versions['webcontainer']) {
+      cacheStore = new LmdbCacheStore(
+        path.join(process.cwd(), 'node_modules', '.cache', 'analog', 'build-optimizer.db')
+      );
+      cache = cacheStore.createCache('jstransformer');
+    }
+
+    const transformer = new JavaScriptTransformer(
+      { sourcemap: false, thirdPartySourcemaps: false, advancedOptimizations: true, jit: true },
+      maxWorkers, cache
+    );
+    let isProd = false;
+
+    return [
+      {
+        name: 'angular-build-optimizer',
+        apply: 'build',
+        async buildEnd() {
+          transformer.close();
+          await cacheStore?.close();
+        },
+        config(userConfig) {
+          isProd = userConfig.mode === 'production' || process.env['NODE_ENV'] === 'production';
+          const defines = isProd ? { ngJitMode: 'false', ngI18nClosureMode: 'false', ngDevMode: 'false', ngServerMode: `${!!userConfig.build?.ssr}` } : {};
+          return {
+            define: defines,
+            [(vite as any).rolldownVersion ? 'oxc' : 'esbuild']: { define: isProd ? defines : undefined },
+          };
+        },
+        transform: {
+          filter: { id: /fesm20.*\.[cm]?js$/ },
+          async handler(_code, id) {
+            const filePath = id.split('?')[0];
+            const sideEffects = id.includes('@angular/compiler') ? true : false;
+            const result = await transformer.transformFile(filePath, false, sideEffects);
+            return { code: Buffer.from(result).toString() };
+          },
+        },
+      },
+      {
+        name: 'angular-sourcemap-strip',
+        apply: 'build',
+        enforce: 'pre',
+        transform: {
+          filter: { id: /\.[cm]?js$/ },
+          handler(code, id) {
+            if (/fesm20/.test(id)) return;
+            return {
+              code: isProd ? code.replace(/^\/\/# sourceMappingURL=[^\r\n]*/gm, '') : code,
+              map: { mappings: '' },
+            };
+          },
+        },
+      },
+    ];
+  }
+
+  /**
+   * Transforms @angular/* FESM modules during dev serve.
+   */
+  function depsPlugin(): Plugin {
+    const transformer = new JavaScriptTransformer({ jit: true, sourcemap: true }, maxWorkers);
+    return {
+      name: 'angular-deps',
+      enforce: 'pre',
+      apply: 'serve',
+      transform: {
+        filter: { id: /fesm(.*?)\.mjs/ },
+        async handler(_code, id) {
+          const filePath = id.split('?')[0];
+          const contents = await transformer.transformFile(filePath);
+          return { code: Buffer.from(contents).toString('utf-8') };
+        },
+      },
+    };
+  }
+
+  /**
+   * Transforms .js deps during Rolldown/esbuild optimization.
+   */
+  function optimizerPlugin(): Plugin {
+    const transformer = new JavaScriptTransformer({ sourcemap: true, jit: true }, 1);
+    return {
+      name: 'angular-optimizer',
+      load: {
+        filter: { id: /\.[cm]?js$/ },
+        async handler(id) {
+          const contents = await transformer.transformFile(id);
+          return { code: Buffer.from(contents).toString('utf-8') } as any;
+        },
+      },
+      buildEnd() { transformer.close(); },
+    } as any;
+  }
+
+  return [
+    mainPlugin,
+    ...buildOptimizerPlugin(),
+    depsPlugin(),
+  ];
 }
