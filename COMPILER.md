@@ -2,10 +2,18 @@
 
 A lightweight Angular compiler that transforms decorators and signal-based reactive APIs into Ivy static definitions. Designed for fast dev server compilation via Vite, without requiring a full TypeScript program.
 
+## Installation
+
+```bash
+npm install @analogjs/angular-compiler
+```
+
+Peer dependencies: `@angular/compiler` >=19, `@angular/compiler-cli` >=19, `@angular/build` >=19, `vite` >=6.
+
 ## Usage
 
 ```ts
-import { angular } from './angular-compiler/src/lib/angular';
+import { angular } from '@analogjs/angular-compiler';
 
 export default defineConfig({
   plugins: [angular()]
@@ -19,6 +27,29 @@ angular({
   tsconfig: 'tsconfig.app.json',    // Path to tsconfig (default)
   inlineStyleLanguage: 'scss',       // 'scss' | 'sass' | 'less' | 'styl' | 'css'
 })
+```
+
+### Programmatic API
+
+```ts
+import { compile, scanFile } from '@analogjs/angular-compiler';
+
+// Compile a single file
+const result = compile(sourceCode, fileName, { registry });
+// result.code — compiled JavaScript
+// result.map — V3 source map
+// result.resourceDependencies — external template/style paths read
+
+// Scan a file for Angular metadata (uses OXC Rust parser)
+const entries = scanFile(code, fileName);
+// entries: [{ selector, kind, className, fileName, ... }]
+```
+
+### Building from Source
+
+```bash
+cd angular-compiler
+npx tsup        # → dist/index.js (ESM, ~64KB)
 ```
 
 ## Architecture
