@@ -12,9 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        angular-version: ['19.0.0', '20.0.0', '21.0.0', 'latest']
+        angular-major: [19, 20, 21, 'latest']
 
-    name: Angular ${{ matrix.angular-version }}
+    name: Angular ${{ matrix.angular-major }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,12 +27,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download Angular ${{ matrix.angular-version }} compliance fixtures
+      - name: Download Angular ${{ matrix.angular-major }} compliance fixtures
         run: |
-          if [ "${{ matrix.angular-version }}" = "latest" ]; then
+          if [ "${{ matrix.angular-major }}" = "latest" ]; then
             bash scripts/setup-conformance.sh
           else
-            bash scripts/setup-conformance.sh ${{ matrix.angular-version }}
+            bash scripts/setup-conformance.sh ${{ matrix.angular-major }}
           fi
 
       - name: Run conformance tests

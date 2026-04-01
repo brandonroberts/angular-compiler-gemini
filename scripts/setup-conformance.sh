@@ -6,9 +6,22 @@
 set -e
 
 if [ -z "$1" ]; then
-  # Auto-detect latest: keep full tag name (may have v prefix)
+  # Auto-detect latest release
   VERSION=$(curl -sL https://api.github.com/repos/angular/angular/releases/latest | grep -o '"tag_name": "[^"]*"' | sed 's/"tag_name": "//;s/"//')
   echo "Detected latest Angular release: $VERSION"
+elif [[ "$1" =~ ^[0-9]+$ ]]; then
+  # Major version only (e.g. "19") — find latest tag for that major
+  MAJOR=$1
+  VERSION=$(git ls-remote --tags https://github.com/angular/angular.git \
+    | grep -oE "refs/tags/v?${MAJOR}\.[0-9]+\.[0-9]+$" \
+    | sed 's|refs/tags/||' \
+    | sort -t. -k2,2n -k3,3n \
+    | tail -1)
+  if [ -z "$VERSION" ]; then
+    echo "No tags found for Angular v$MAJOR"
+    exit 1
+  fi
+  echo "Latest Angular v$MAJOR release: $VERSION"
 else
   VERSION=$1
 fi
