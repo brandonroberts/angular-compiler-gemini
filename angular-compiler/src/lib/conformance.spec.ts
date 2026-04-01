@@ -135,7 +135,6 @@ const SKIP_PATTERNS = [
   /local compilation/i,
   /jit/i,
   /forward.?ref.*provider/i, // Complex forwardRef in providers
-  /same.?name/i, // Components inside function scopes (not top-level)
 ];
 
 function shouldSkip(testCase: TestCase): boolean {

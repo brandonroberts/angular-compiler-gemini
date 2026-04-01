@@ -242,12 +242,15 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
 
   const ANGULAR_DECORATORS = new Set(['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule']);
 
-  for (const stmt of origSourceFile.statements) {
-    // Handle export declarations wrapping classes
-    const node = ts.isExportDeclaration(stmt) ? undefined :
-      (ts.isClassDeclaration(stmt) ? stmt : undefined);
-    if (!node) continue;
+  // Collect all class declarations recursively (including inside function scopes)
+  const allClasses: ts.ClassDeclaration[] = [];
+  function findClasses(node: ts.Node) {
+    if (ts.isClassDeclaration(node)) allClasses.push(node);
+    ts.forEachChild(node, findClasses);
+  }
+  findClasses(origSourceFile);
 
+  for (const node of allClasses) {
     const decorators = ts.getDecorators(node);
     if (!decorators || decorators.length === 0) continue;
 
