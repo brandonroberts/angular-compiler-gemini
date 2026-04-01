@@ -90,7 +90,7 @@ Source file (.ts)
          compileClassMetadata()
          │
          ▼
-       AstTranslator (Angular output AST → TypeScript AST)
+       String emitter (Angular output AST → JavaScript strings)
          │
          ▼
        MagicString (surgical edits on original source → JS + source map)
@@ -109,8 +109,7 @@ The `angular()` plugin returns an array of Vite plugins:
 | File | Purpose |
 |---|---|
 | `angular.ts` | Main plugin entry, returns `Plugin[]`, composes all internal plugins |
-| `compile.ts` | Single-file AOT compiler: metadata extraction, signals, DI, field decorators, Ivy codegen |
-| `ast-translator.ts` | Angular output AST → TypeScript AST visitor (all expression/statement types) |
+| `compile.ts` | Single-file AOT compiler: metadata extraction, signals, DI, field decorators, Ivy codegen, inline string emitter |
 | `registry.ts` | OXC-based file scanner, `ComponentRegistry` type |
 | `plugins/build-optimizer.ts` | Production `@angular/*` FESM transforms |
 | `plugins/deps.ts` | Dev serve `@angular/*` FESM transforms |
@@ -276,7 +275,7 @@ Both produce identical Ivy output because both call the same `@angular/compiler`
 | Global analysis | Via type checker (full scope resolution) | Via tsconfig + OXC registry scan |
 | Constructor DI | Full (via type checker) | Full (via AST parameter analysis) |
 | `setClassMetadata` | Yes | Yes |
-| Source maps | Yes (via TS emitter) | Yes (via MagicString surgical edits) |
+| Source maps | Yes (via TS emitter) | Yes (via MagicString surgical edits + inline string emitter) |
 | HMR | Full (with tracking metadata) | Leaf components (root falls back to reload) |
 | `@defer` lazy loading | Yes | Yes |
 | SCSS preprocessing | Via `@angular/build` | Via Vite `preprocessCSS` + LmdbCacheStore |
@@ -340,7 +339,7 @@ In Vite dev mode, only requested files are compiled on demand. A typical page lo
 |---|---|---|
 | Template parsing | ~46% | `@angular/compiler` (JS) |
 | TypeScript parsing | ~29% | `ts.createSourceFile` (JS) |
-| Code emission | ~25% | `ts.Printer` + MagicString |
+| Code emission | ~25% | Inline string emitter + MagicString |
 
 The dominant cost is Angular's template parser — JavaScript that can't be replaced with Rust without reimplementing the Angular template compiler.
 
@@ -398,7 +397,7 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 | `directive.spec.ts` | 2 | Host bindings, exportAs |
 | `pipe.spec.ts` | 2 | Pure and impure |
 | `compile.spec.ts` | 2 | Original smoke tests |
-| `conformance.spec.ts` | 160 | Angular compliance test suite (v17-v21, 90%+ Ivy instruction match) |
+| `conformance.spec.ts` | 160 | Angular compliance test suite (v17-v21, 87%+ Ivy instruction match) |
 
 ### Conformance Testing
 
@@ -412,8 +411,8 @@ The compiler is validated against Angular's official compliance test suite. A co
 | v18 (latest patch) | 76.8% | 143 |
 | v19 (latest patch) | 81.9% | 137 |
 | v20 (latest patch) | 92.5% | 141 |
-| v21 (latest patch) | 90.8% | 148 |
-| latest | 90.3% | 155 |
+| v21 (latest patch) | 87.8% | 148 |
+| latest | 87.8% | 155 |
 
 Remaining soft-failures are output formatting differences (`@defer` multi-file deps, named function patterns), not functional issues. All versions produce 0 hard test failures.
 
