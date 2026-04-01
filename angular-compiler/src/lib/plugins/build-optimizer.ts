@@ -1,34 +1,18 @@
 import { Plugin } from 'vite';
 import * as vite from 'vite';
-import * as path from 'node:path';
-import { createRequire } from 'node:module';
 import { JavaScriptTransformer } from '@angular/build/private';
-
-let LmdbCacheStore: any;
-try {
-  const req = createRequire(import.meta.url);
-  const buildRequire = createRequire(req.resolve('@angular/build/private'));
-  ({ LmdbCacheStore } = buildRequire('../src/tools/esbuild/lmdb-cache-store'));
-} catch { /* not available */ }
+import { createCache } from './cache';
 
 /**
  * Transforms @angular/* FESM modules for production builds.
  * Applies advanced optimizations and tree-shaking annotations.
  */
 export function buildOptimizerPlugin(maxWorkers: number): Plugin[] {
-  let cacheStore: any;
-  let cache: unknown;
-
-  if (LmdbCacheStore && !process.versions['webcontainer']) {
-    cacheStore = new LmdbCacheStore(
-      path.join(process.cwd(), 'node_modules', '.cache', 'analog', 'build-optimizer.db')
-    );
-    cache = cacheStore.createCache('jstransformer');
-  }
+  const cacheEntry = createCache('build-optimizer');
 
   const transformer = new JavaScriptTransformer(
     { sourcemap: false, thirdPartySourcemaps: false, advancedOptimizations: true, jit: true },
-    maxWorkers, cache
+    maxWorkers, cacheEntry?.cache
   );
   let isProd = false;
 
@@ -38,7 +22,7 @@ export function buildOptimizerPlugin(maxWorkers: number): Plugin[] {
       apply: 'build',
       async buildEnd() {
         transformer.close();
-        await cacheStore?.close();
+        await cacheEntry?.close();
       },
       config(userConfig) {
         isProd = userConfig.mode === 'production' || process.env['NODE_ENV'] === 'production';

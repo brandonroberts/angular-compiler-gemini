@@ -1,11 +1,14 @@
 import { Plugin } from 'vite';
 import { JavaScriptTransformer } from '@angular/build/private';
+import { createCache } from './cache';
 
 /**
  * Transforms @angular/* FESM modules during dev serve.
+ * Uses LmdbCacheStore to avoid re-transforming unchanged modules.
  */
 export function depsPlugin(maxWorkers: number): Plugin {
-  const transformer = new JavaScriptTransformer({ jit: true, sourcemap: true }, maxWorkers);
+  const cacheEntry = createCache('dev-deps');
+  const transformer = new JavaScriptTransformer({ jit: true, sourcemap: true }, maxWorkers, cacheEntry?.cache);
   return {
     name: 'angular-deps',
     enforce: 'pre',
