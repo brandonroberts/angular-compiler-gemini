@@ -1,6 +1,6 @@
 import { Plugin, ResolvedConfig, preprocessCSS } from 'vite';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { readConfiguration } from '@angular/compiler-cli';
 import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
