@@ -206,8 +206,8 @@ export function angular(options: AngularPluginOptions = {}): Plugin[] {
 
   const maxWorkers = Math.max(1, availableParallelism() - 1);
 
-  const mainPlugin: Plugin = {
-    name: 'angular-compiler',
+  const angularCompilationPlugin: Plugin = {
+    name: 'analogjs-angular-compiler',
     enforce: 'pre',
 
     config(_config, { command }) {
@@ -339,7 +339,7 @@ export function angular(options: AngularPluginOptions = {}): Plugin[] {
   };
 
   return [
-    mainPlugin,
+    angularCompilationPlugin,
     ...buildOptimizerPlugin(maxWorkers),
     depsPlugin(maxWorkers),
   ];
