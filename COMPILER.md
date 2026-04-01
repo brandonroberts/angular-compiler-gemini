@@ -10,7 +10,16 @@ npm install @analogjs/angular-compiler
 
 Peer dependencies: `@angular/compiler` >=19, `@angular/compiler-cli` >=19, `@angular/build` >=19, `vite` >=6.
 
+## Entry Points
+
+| Import | Exports | Use case |
+|---|---|---|
+| `@analogjs/angular-compiler/vite` | `angular()` | Vite plugin for `vite.config.ts` |
+| `@analogjs/angular-compiler` | `compile()`, `scanFile()` | Programmatic compiler API (no Vite dependency) |
+
 ## Usage
+
+### Vite Plugin
 
 ```ts
 import { angular } from '@analogjs/angular-compiler/vite';
@@ -20,7 +29,7 @@ export default defineConfig({
 });
 ```
 
-### Options
+#### Options
 
 ```ts
 angular({
@@ -49,8 +58,13 @@ const entries = scanFile(code, fileName);
 
 ```bash
 cd angular-compiler
-npx tsup        # → dist/index.js (ESM, ~64KB)
+npx tsup
 ```
+
+Output:
+- `dist/index.js` (128B) — compiler API re-exports
+- `dist/vite.js` (12KB) — Vite plugin re-export
+- `dist/chunk-*.js` (121KB) — shared compiler code
 
 ## Architecture
 
