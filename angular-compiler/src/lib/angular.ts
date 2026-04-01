@@ -181,12 +181,7 @@ export function angular(options: AngularPluginOptions = {}): Plugin {
 
     try {
       const config = readConfiguration(tsconfigPath);
-      return config.rootNames.filter(f =>
-        !f.includes('node_modules') &&
-        f.endsWith('.ts') &&
-        !f.endsWith('.spec.ts') &&
-        !f.endsWith('.d.ts')
-      );
+      return config.rootNames;
     } catch (e: any) {
       console.warn(`[angular-compiler] Could not read tsconfig at ${tsconfigPath}: ${e.message}`);
       return [];
