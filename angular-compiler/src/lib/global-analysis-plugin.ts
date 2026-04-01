@@ -1,6 +1,7 @@
 import { Plugin, ResolvedConfig, preprocessCSS } from 'vite';
 import * as fs from 'fs';
 import * as path from 'path';
+import { readConfiguration } from '@angular/compiler-cli';
 import { ComponentRegistry } from './registry';
 import { scanFile } from './registry';
 import { compile } from './compile';
@@ -66,6 +67,9 @@ if (import.meta.hot) {
  * HMR:                  Rescan changed files and invalidate dependents.
  */
 export interface AngularPluginOptions {
+  /** Path to tsconfig file. Default: 'tsconfig.app.json', falls back to 'tsconfig.json'. */
+  tsconfig?: string;
+  /** @deprecated Use tsconfig instead. Source directories to scan. */
   srcDirs?: string[];
   /** File extension for inline style preprocessing. Default: 'scss'. Set to 'less', 'sass', 'styl', or 'css' (no preprocessing). */
   inlineStyleLanguage?: 'scss' | 'sass' | 'less' | 'styl' | 'css';
@@ -73,7 +77,6 @@ export interface AngularPluginOptions {
 
 export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = {}): Plugin {
   const opts: AngularPluginOptions = Array.isArray(options) ? { srcDirs: options } : options;
-  const srcDirs = opts.srcDirs || ['src'];
   const inlineStyleLanguage = opts.inlineStyleLanguage || 'scss';
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
@@ -170,18 +173,41 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
     return result.size > 0 ? result : undefined;
   }
 
-  function scanDirectory(dir: string) {
-    if (!fs.existsSync(dir)) return;
+  /**
+   * Resolve source files from tsconfig using Angular's readConfiguration.
+   * Uses rootNames from the parsed config to get the full file list.
+   */
+  function resolveSourceFiles(): string[] {
+    const root = process.cwd();
+    const tsconfigPath = path.resolve(root, opts.tsconfig || 'tsconfig.app.json');
 
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.resolve(dir, entry.name);
-      if (entry.isDirectory() && entry.name !== 'node_modules') {
-        scanDirectory(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') && !entry.name.endsWith('.d.ts')) {
-        scanSingleFile(fullPath);
+    try {
+      const config = readConfiguration(tsconfigPath);
+      if (config.rootNames.length > 0) {
+        return config.rootNames.filter(f =>
+          !f.includes('node_modules') &&
+          f.endsWith('.ts') &&
+          !f.endsWith('.spec.ts') &&
+          !f.endsWith('.d.ts')
+        );
+      }
+    } catch {
+      // tsconfig not found or invalid — fall through to fallback
+    }
+
+    // Fallback: walk srcDirs
+    const srcDirs = opts.srcDirs || ['src'];
+    const files: string[] = [];
+    function walk(dir: string) {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.resolve(dir, entry.name);
+        if (entry.isDirectory() && entry.name !== 'node_modules') walk(fullPath);
+        else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') && !entry.name.endsWith('.d.ts')) files.push(fullPath);
       }
     }
+    for (const dir of srcDirs) walk(path.resolve(root, dir));
+    return files;
   }
 
   function scanSingleFile(filePath: string) {
@@ -210,8 +236,9 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
 
     buildStart() {
       registry.clear();
-      for (const dir of srcDirs) {
-        scanDirectory(path.resolve(process.cwd(), dir));
+      const files = resolveSourceFiles();
+      for (const file of files) {
+        scanSingleFile(file);
       }
     },
 
