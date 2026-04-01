@@ -2,17 +2,37 @@
 
 A lightweight Angular compiler that transforms decorators and signal-based reactive APIs into Ivy static definitions. Designed for fast dev server compilation via Vite, without requiring a full TypeScript program.
 
+## Usage
+
+```ts
+import { angular } from './angular-compiler/src/lib/angular';
+
+export default defineConfig({
+  plugins: [angular()]
+});
+```
+
+### Options
+
+```ts
+angular({
+  tsconfig: 'tsconfig.app.json',    // Path to tsconfig (default)
+  inlineStyleLanguage: 'scss',       // 'scss' | 'sass' | 'less' | 'styl' | 'css'
+})
+```
+
 ## Architecture
 
 ```
 Source file (.ts)
   │
-  ├─ Global Analysis Plugin (buildStart)
+  ├─ angular-compiler plugin (buildStart)
+  │    @angular/compiler-cli readConfiguration() → rootNames
   │    OXC parser ──▶ scanFile() ──▶ ComponentRegistry
   │                                   (selectors, pipes, NgModule exports)
   │
-  └─ Single-file Transform (per request)
-       ts.createSourceFile ──▶ extractMetadata / detectSignals
+  └─ angular-compiler plugin (transform, per request)
+       ts.createSourceFile ──▶ extractMetadata / detectSignals / detectFieldDecorators
          │
          ▼
        @angular/compiler
@@ -21,29 +41,36 @@ Source file (.ts)
          compileDirectiveFromMetadata()
          compilePipeFromMetadata()
          compileNgModule() / compileInjector()
+         compileFactoryFunction()
+         compileClassMetadata()
          │
          ▼
        AstTranslator (Angular output AST → TypeScript AST)
          │
          ▼
-       ts.Printer ──▶ JavaScript output
+       MagicString (surgical edits on original source → JS + source map)
 ```
 
-The compiler is split into two phases:
+The `angular()` plugin returns an array of Vite plugins:
 
-1. **Global analysis** (`global-analysis-plugin.ts`): A Vite plugin that scans all source files at build start using OXC's native Rust parser. Builds a `ComponentRegistry` mapping class names to selectors, pipe names, and NgModule exports.
-
-2. **Single-file transform** (`compile.ts`): Per-file decorator-to-Ivy transformation. Receives the registry for cross-file dependency resolution. Emits final Ivy instructions directly — no linker step required.
+1. **`analogjs-angular-compiler`** — AOT compilation, global analysis registry, HMR, style preprocessing
+2. **`angular-build-optimizer`** — production `@angular/*` FESM transforms with advanced optimizations
+3. **`angular-sourcemap-strip`** — strip source maps from library code in production
+4. **`angular-deps`** — dev serve `@angular/*` FESM transforms with caching
+5. **`angular-optimizer`** — Rolldown/esbuild dep pre-optimization (injected via `optimizeDeps`)
 
 ## Source Files
 
-| File | Lines | Purpose |
-|---|---|---|
-| `compile.ts` | 518 | Single-file compiler: decorator extraction, signal detection, Ivy codegen |
-| `ast-translator.ts` | 290 | Angular output AST → TypeScript AST visitor (all expression/statement types) |
-| `registry.ts` | 110 | OXC-based file scanner, `ComponentRegistry` type |
-| `global-analysis-plugin.ts` | 133 | Vite plugin: registry build, transform orchestration, HMR invalidation |
-| **Total** | **1,051** | |
+| File | Purpose |
+|---|---|
+| `angular.ts` | Main plugin entry, returns `Plugin[]`, composes all internal plugins |
+| `compile.ts` | Single-file AOT compiler: metadata extraction, signals, DI, field decorators, Ivy codegen |
+| `ast-translator.ts` | Angular output AST → TypeScript AST visitor (all expression/statement types) |
+| `registry.ts` | OXC-based file scanner, `ComponentRegistry` type |
+| `plugins/build-optimizer.ts` | Production `@angular/*` FESM transforms |
+| `plugins/deps.ts` | Dev serve `@angular/*` FESM transforms |
+| `plugins/optimizer.ts` | Rolldown/esbuild dep pre-optimization |
+| `plugins/cache.ts` | Shared LmdbCacheStore for transform caching |
 
 ## What's Supported
 
@@ -108,7 +135,7 @@ The compiler is split into two phases:
 |---|---|
 | `signal()` | Yes (preserved as-is) |
 | `computed()` | Yes (preserved as-is) |
-| `input()` / `input.required()` | Yes (signal input descriptors with required flag) |
+| `input()` / `input.required()` | Yes (signal input descriptors with required flag, transform extraction) |
 | `model()` / `model.required()` | Yes (generates input + `Change` output) |
 | `output()` | Yes |
 | `viewChild()` / `viewChild.required()` | Yes (signal queries) |
@@ -127,6 +154,7 @@ The compiler is split into two phases:
 | `@switch` / `@case` / `@default` | Yes |
 | `@defer` with all triggers (`on viewport`, `on idle`, `on timer`, `on hover`, `on interaction`, `when`) | Yes |
 | `@defer` sub-blocks (`@loading`, `@placeholder`, `@error`) with `minimum` | Yes |
+| `@defer` lazy dependency loading via `import()` | Yes |
 | Nested `@defer` inside control flow | Yes |
 | `@let` declarations | Yes |
 | `{{ interpolation }}` | Yes |
@@ -152,11 +180,15 @@ The compiler is split into two phases:
 
 | Feature | Reason |
 |---|---|
-| Template type checking | Requires full `ts.Program`; use Angular Language Service in IDE. Note: `required` input validation is a compile-time check in ngtsc — this compiler detects the `required` flag but does not enforce it at compile time |
+| Template type checking | Requires full `ts.Program`; use Angular Language Service in IDE |
 | i18n / localization | Out of scope (future consideration) |
 | Partial / linker compilation | Handled by separate plugin |
+| Template source maps | Angular compiler doesn't propagate sourceSpan to output AST |
+| Signal debug names | Not implemented |
+| `setClassDebugInfo` | Not implemented |
+| Spread imports (`...Module`) | Not implemented |
 
-### HMR (Hot Module Replacement)
+## HMR (Hot Module Replacement)
 
 Leaf components support true HMR via Angular's `ɵɵreplaceMetadata`. When a component file changes in dev mode:
 
@@ -166,28 +198,22 @@ Leaf components support true HMR via Angular's `ɵɵreplaceMetadata`. When a com
 
 Root components (e.g. `App`) fall back to page reload since they can't be hot-replaced without re-bootstrapping the application. Non-Angular files use Vite's default HMR.
 
-### Source Maps
+External template and style changes invalidate the parent `.ts` module, triggering re-compilation and HMR. Preprocessed styles are cached by mtime for fast re-compilation.
 
-The compiler generates V3 source maps via `magic-string` that map the compiled output back to the original TypeScript source. The source map is passed through Vite's transform pipeline which composes it with other transforms (esbuild type stripping, etc.) for end-to-end mapping in browser devtools.
+## Source Maps
 
-### Style Preprocessing
+The compiler generates V3 source maps via `magic-string` using surgical edits on the original source. Class bodies, methods, and expressions stay at their original character positions — only removed decorators and inserted Ivy fields are new content. The source map is passed through Vite's transform pipeline which composes it with other transforms for end-to-end mapping in browser devtools.
+
+## Style Preprocessing
 
 Both external and inline styles are preprocessed via Vite's `preprocessCSS` API:
 
-- **External styles** (`.scss`, `.sass`, `.less`, `.styl` via `styleUrl`/`styleUrls`): read, preprocessed, and passed to the compiler via `resolvedStyles`
+- **External styles** (`.scss`, `.sass`, `.less`, `.styl` via `styleUrl`/`styleUrls`): read, preprocessed, cached by mtime, and passed to the compiler via `resolvedStyles`
 - **Inline styles** (`styles: [...]` or `styles: \`...\``): extracted via TypeScript AST, preprocessed, and passed via `resolvedInlineStyles`
 
 The `inlineStyleLanguage` option (default: `'scss'`) controls the file extension used for inline style preprocessing. Set to `'css'` to disable inline preprocessing.
 
-```ts
-globalAnalysisPlugin({ srcDirs: ['src'], inlineStyleLanguage: 'scss' })
-```
-
-Preprocessed styles are cached by mtime for fast HMR re-compilation. Note: `setClassMetadata` preserves original decorator args including raw SCSS — this is correct behavior (metadata only, not applied as CSS).
-
-### File Watching
-
-External templates (`templateUrl`) and styles (`styleUrl`/`styleUrls`) are read and inlined at compile time. The global analysis plugin tracks these resource dependencies and invalidates the parent `.ts` module when the external file changes, triggering a page reload with the updated content.
+Both the build optimizer and dev deps plugins share an `LmdbCacheStore` for cached `JavaScriptTransformer` results.
 
 ## Comparison with Angular's Compilers
 
@@ -197,26 +223,24 @@ Both produce identical Ivy output because both call the same `@angular/compiler`
 
 | | ngtsc | This compiler |
 |---|---|---|
-| Size | ~200,000+ lines | ~1,750 lines |
+| Size | ~200,000+ lines | ~2,000 lines |
 | Requires `ts.Program` | Yes (reads all files, resolves modules) | No |
 | Type checking | Full TS + template type checking | None (use Angular Language Service) |
 | Template compilation | Full Ivy instructions | Full Ivy instructions (same APIs) |
 | Output format | `ɵɵdefineComponent` (final) | `ɵɵdefineComponent` (final) |
-| Global analysis | Via type checker (full scope resolution) | Via OXC registry scan (selector matching) |
+| Global analysis | Via type checker (full scope resolution) | Via tsconfig + OXC registry scan |
 | Constructor DI | Full (via type checker) | Full (via AST parameter analysis) |
 | `setClassMetadata` | Yes | Yes |
 | Source maps | Yes (via TS emitter) | Yes (via MagicString surgical edits) |
 | HMR | Full (with tracking metadata) | Leaf components (root falls back to reload) |
 | `@defer` lazy loading | Yes | Yes |
-| SCSS preprocessing | Via `@angular/build` | Via Vite `preprocessCSS` |
+| SCSS preprocessing | Via `@angular/build` | Via Vite `preprocessCSS` + LmdbCacheStore |
 | i18n | Full ICU extraction + localization | Not supported |
 | Template type checking | Full (`strictTemplates`) | Not supported |
 | Incremental compilation | `ts.Program` reuse | Per-file (Vite handles caching) |
 | Diagnostic messages | Hundreds of template/binding errors | Unresolved selector warnings only |
 | Partial compilation (libraries) | `ɵɵngDeclareComponent` | Not in scope |
 | Declaration files (`.d.ts`) | Yes | Not in scope |
-| Signal debug names | Yes | Not implemented |
-| `setClassDebugInfo` | Yes | Not implemented |
 
 #### Performance
 
@@ -271,7 +295,7 @@ In Vite dev mode, only requested files are compiled on demand. A typical page lo
 |---|---|---|
 | Template parsing | ~46% | `@angular/compiler` (JS) |
 | TypeScript parsing | ~29% | `ts.createSourceFile` (JS) |
-| Code printing | ~25% | `ts.Printer` (JS) |
+| Code emission | ~25% | `ts.Printer` + MagicString |
 
 The dominant cost is Angular's template parser — JavaScript that can't be replaced with Rust without reimplementing the Angular template compiler.
 
@@ -284,10 +308,6 @@ The dominant cost is Angular's template parser — JavaScript that can't be repl
 | 1000 | ~37ms | ~55ms |
 
 The registry scan uses OXC's native Rust parser for ~1.5x faster file scanning at build start.
-
-### Production Build
-
-Full production build of the demo app (314 modules): **~1.2 seconds**.
 
 ## Angular Version Compatibility
 
@@ -309,7 +329,7 @@ When TypeScript moves to `tsgo` (Go-based compiler), Angular will need to separa
 tsgo (Go)                    Angular Transform (JS)
 ├─ Type stripping            ├─ compile() per file
 ├─ Module resolution         ├─ @angular/compiler APIs
-└─ Type checking             └─ Global analysis plugin
+└─ Type checking             └─ angular() plugin
                                   └─ Registry scan (OXC/Rust)
 ```
 
@@ -317,20 +337,38 @@ This compiler's architecture — single-file transforms using `@angular/compiler
 
 ## Test Suite
 
-145 tests across 13 spec files:
+295 tests across 13 spec files:
 
 | File | Tests | Coverage |
 |---|---|---|
-| `component.spec.ts` | 43 | All @Component features, signals (including required variants), control flow, defer, pipes, content projection, external resources, resource dependencies, providers |
-| `ast-translator.spec.ts` | 42 | Every AST visitor method (expressions + statements) |
-| `directive.spec.ts` | 2 | Host bindings, exportAs |
-| `pipe.spec.ts` | 2 | Pure and impure |
-| `injectable.spec.ts` | 3 | `providedIn` variants |
-| `ngmodule.spec.ts` | 3 | Compilation, providers, export resolution |
-| `registry.spec.ts` | 6 | All decorator types, multi-declaration, NgModule exports |
-| `global-analysis.spec.ts` | 5 | Cross-file component, pipe, directive resolution |
+| `component.spec.ts` | 48 | All @Component features, signals (including required variants), control flow, defer, pipes, content projection, external resources, resource dependencies, providers, source maps |
+| `ast-translator.spec.ts` | 43 | Every AST visitor method (expressions + statements), ngDevMode global |
 | `decorator-fields.spec.ts` | 15 | @Input, @Output, @ViewChild, @ContentChild, @HostBinding, @HostListener field decorators |
 | `constructor-di.spec.ts` | 8 | Constructor DI: @Inject, @Optional, inheritance, union types, multiple params |
 | `error-handling.spec.ts` | 7 | Unknown decorators, undecorated classes, selectorless components, forwardRef, invalid templates |
+| `registry.spec.ts` | 6 | All decorator types, multi-declaration, NgModule exports |
+| `global-analysis.spec.ts` | 5 | Cross-file component, pipe, directive resolution |
+| `ngmodule.spec.ts` | 3 | Compilation, providers, export resolution |
+| `injectable.spec.ts` | 3 | `providedIn` variants |
+| `directive.spec.ts` | 2 | Host bindings, exportAs |
+| `pipe.spec.ts` | 2 | Pure and impure |
 | `compile.spec.ts` | 2 | Original smoke tests |
-| `app.spec.ts` | 1 | Application-level test |
+| `conformance.spec.ts` | 150 | Angular compliance test suite (81.3% Ivy instruction match rate) |
+
+### Conformance Testing
+
+The compiler is validated against Angular's official compliance test suite (617 test cases). A conformance test runner compares compiled output against Angular's expected Ivy instruction patterns.
+
+```bash
+# Local (auto-detects ~/projects/angular/angular)
+npx vitest run angular-compiler/src/lib/conformance.spec.ts
+
+# CI setup for any Angular version
+bash scripts/setup-conformance.sh 21.0.0
+ANGULAR_SOURCE_DIR=.angular-conformance npx vitest run angular-compiler/src/lib/conformance.spec.ts
+
+# Latest release
+bash scripts/setup-conformance.sh
+```
+
+CI runs a matrix of Angular 19.0.0, 20.0.0, and 21.0.0 on every push/PR.
