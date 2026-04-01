@@ -5,7 +5,10 @@ import { dirname, resolve } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  entry: [resolve(__dirname, 'src/lib/index.ts')],
+  entry: {
+    index: resolve(__dirname, 'src/lib/index.ts'),
+    vite: resolve(__dirname, 'src/lib/vite.ts'),
+  },
   outDir: resolve(__dirname, 'dist'),
   format: ['esm'],
   dts: false,

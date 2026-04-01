@@ -13,7 +13,7 @@ Peer dependencies: `@angular/compiler` >=19, `@angular/compiler-cli` >=19, `@ang
 ## Usage
 
 ```ts
-import { angular } from '@analogjs/angular-compiler';
+import { angular } from '@analogjs/angular-compiler/vite';
 
 export default defineConfig({
   plugins: [angular()]

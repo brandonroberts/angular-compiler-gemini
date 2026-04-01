@@ -1,7 +1,7 @@
 /// <reference types="vitest" />
 
 import { defineConfig } from 'vite';
-import { angular } from './angular-compiler/src/lib/angular';
+import { angular } from './angular-compiler/src/lib/vite';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
