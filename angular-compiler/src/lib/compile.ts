@@ -22,10 +22,144 @@ import {
   ParseSourceSpan,
   compileClassMetadata,
 } from '@angular/compiler';
-import { AstTranslator } from './ast-translator';
 import { ComponentRegistry } from './registry';
 
-const translator = new AstTranslator();
+/** Shared printer — only used as fallback for complex WrappedNodeExpr (e.g. decorator args). */
+const sharedPrinter = ts.createPrinter({ removeComments: true });
+const emptySourceFile = ts.createSourceFile('_.ts', '', ts.ScriptTarget.Latest, false);
+
+const BINARY_OP_STR: Record<number, string> = {
+  [o.BinaryOperator.Equals]: '==', [o.BinaryOperator.NotEquals]: '!=',
+  [o.BinaryOperator.Assign]: '=', [o.BinaryOperator.Identical]: '===',
+  [o.BinaryOperator.NotIdentical]: '!==', [o.BinaryOperator.Minus]: '-',
+  [o.BinaryOperator.Plus]: '+', [o.BinaryOperator.Divide]: '/',
+  [o.BinaryOperator.Multiply]: '*', [o.BinaryOperator.Modulo]: '%',
+  [o.BinaryOperator.And]: '&&', [o.BinaryOperator.Or]: '||',
+  [o.BinaryOperator.BitwiseOr]: '|', [o.BinaryOperator.BitwiseAnd]: '&',
+  [o.BinaryOperator.Lower]: '<', [o.BinaryOperator.LowerEquals]: '<=',
+  [o.BinaryOperator.Bigger]: '>', [o.BinaryOperator.BiggerEquals]: '>=',
+  [o.BinaryOperator.NullishCoalesce]: '??',
+  [o.BinaryOperator.Exponentiation]: '**', [o.BinaryOperator.In]: 'in',
+  [o.BinaryOperator.AdditionAssignment]: '+=', [o.BinaryOperator.SubtractionAssignment]: '-=',
+  [o.BinaryOperator.MultiplicationAssignment]: '*=', [o.BinaryOperator.DivisionAssignment]: '/=',
+  [o.BinaryOperator.RemainderAssignment]: '%=', [o.BinaryOperator.ExponentiationAssignment]: '**=',
+  [o.BinaryOperator.AndAssignment]: '&&=', [o.BinaryOperator.OrAssignment]: '||=',
+  [o.BinaryOperator.NullishCoalesceAssignment]: '??=',
+};
+
+/**
+ * Emits Angular output AST directly to JavaScript strings, bypassing
+ * ts.factory node creation and ts.Printer serialization (~4x faster).
+ */
+class JSEmitter implements o.ExpressionVisitor, o.StatementVisitor {
+  /** Set by compile() so WrappedNodeExpr fallback can print with correct source context. */
+  static _currentSourceFile: ts.SourceFile | undefined;
+
+  private emitExpr(e: any): string {
+    if (!e) return 'null';
+    if (typeof e.visitExpression === 'function') return e.visitExpression(this, null);
+    // Angular v21 LiteralMapPropertyAssignment: {key, value, quoted}
+    if ('key' in e && 'value' in e) {
+      const key = e.quoted ? JSON.stringify(e.key) : e.key;
+      return key + ': ' + this.emitExpr(e.value);
+    }
+    return 'null';
+  }
+  visitWrappedNodeExpr(ast: o.WrappedNodeExpr<any>) {
+    const node = ast.node;
+    if (node.kind === ts.SyntaxKind.Identifier) return (node as ts.Identifier).escapedText as string;
+    if (node.kind === ts.SyntaxKind.StringLiteral) return JSON.stringify((node as ts.StringLiteral).text);
+    if (node.kind === ts.SyntaxKind.NumericLiteral) return (node as ts.NumericLiteral).text;
+    if (node.kind === ts.SyntaxKind.TrueKeyword) return 'true';
+    if (node.kind === ts.SyntaxKind.FalseKeyword) return 'false';
+    if (node.kind === ts.SyntaxKind.NullKeyword) return 'null';
+    if (node.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) return '`' + (node as ts.NoSubstitutionTemplateLiteral).text + '`';
+    // Fallback for complex wrapped nodes (e.g. decorator arguments, array literals).
+    // Use currentSourceFile when available for correct position-based printing.
+    return sharedPrinter.printNode(ts.EmitHint.Unspecified, node, JSEmitter._currentSourceFile || emptySourceFile);
+  }
+  visitExternalExpr(ast: o.ExternalExpr) {
+    const name = ast.value.name!;
+    if (name === 'ngDevMode') return name;
+    return 'i0.' + name;
+  }
+  visitLiteralExpr(ast: o.LiteralExpr) {
+    const v = ast.value;
+    if (typeof v === 'string') return JSON.stringify(v);
+    if (typeof v === 'number') return v < 0 ? '(-' + (-v) + ')' : '' + v;
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    if (v === undefined) return 'void 0';
+    return 'null';
+  }
+  visitLiteralArrayExpr(ast: o.LiteralArrayExpr) {
+    return '[' + ast.entries.map(e => this.emitExpr(e)).join(', ') + ']';
+  }
+  visitLiteralMapExpr(ast: o.LiteralMapExpr) {
+    return '{' + ast.entries.map(e => this.emitExpr(e)).join(', ') + '}';
+  }
+  visitInvokeFunctionExpr(ast: o.InvokeFunctionExpr) {
+    const fn = ast.fn.visitExpression(this, null);
+    const args = ast.args.map((a: any) => a.visitExpression(this, null)).join(', ');
+    // Wrap arrow/function expressions in parens for valid IIFE syntax
+    if (ast.fn instanceof o.ArrowFunctionExpr || ast.fn instanceof o.FunctionExpr) {
+      return '(' + fn + ')(' + args + ')';
+    }
+    return fn + '(' + args + ')';
+  }
+  visitReadVarExpr(ast: o.ReadVarExpr) {
+    if (ast.name === 'this') return 'this';
+    if (ast.name === 'super') return 'super';
+    return ast.name!;
+  }
+  visitReadPropExpr(ast: o.ReadPropExpr) { return ast.receiver.visitExpression(this, null) + '.' + ast.name; }
+  visitReadKeyExpr(ast: o.ReadKeyExpr) { return ast.receiver.visitExpression(this, null) + '[' + ast.index.visitExpression(this, null) + ']'; }
+  visitConditionalExpr(ast: o.ConditionalExpr) { return '(' + ast.condition.visitExpression(this, null) + ' ? ' + ast.trueCase.visitExpression(this, null) + ' : ' + ast.falseCase!.visitExpression(this, null) + ')'; }
+  visitBinaryOperatorExpr(ast: o.BinaryOperatorExpr) { return ast.lhs.visitExpression(this, null) + ' ' + (BINARY_OP_STR[ast.operator] || '=') + ' ' + ast.rhs.visitExpression(this, null); }
+  visitNotExpr(ast: o.NotExpr) { return '!(' + ast.condition.visitExpression(this, null) + ')'; }
+  visitFunctionExpr(ast: o.FunctionExpr) { return '(' + ast.params.map((p: any) => p.name).join(', ') + ') => {' + ast.statements.map((s: any) => s.visitStatement(this, null)).join(' ') + '}'; }
+  visitArrowFunctionExpr(ast: o.ArrowFunctionExpr) {
+    const params = '(' + ast.params.map((p: any) => p.name).join(', ') + ')';
+    if (Array.isArray(ast.body)) return params + ' => {' + ast.body.map((s: any) => s.visitStatement(this, null)).join(' ') + '}';
+    return params + ' => ' + (ast.body as o.Expression).visitExpression(this, null);
+  }
+  visitWriteVarExpr(ast: any) { return ast.name + ' = ' + ast.value.visitExpression(this, null); }
+  visitWritePropExpr(ast: any) { return ast.receiver.visitExpression(this, null) + '.' + ast.name + ' = ' + ast.value.visitExpression(this, null); }
+  visitWriteKeyExpr(ast: any) { return ast.receiver.visitExpression(this, null) + '[' + ast.index.visitExpression(this, null) + '] = ' + ast.value.visitExpression(this, null); }
+  visitInvokeMethodExpr(ast: any) { return ast.receiver.visitExpression(this, null) + '.' + ast.name + '(' + ast.args.map((a: any) => a.visitExpression(this, null)).join(', ') + ')'; }
+  visitTypeofExpr(ast: o.TypeofExpr) { return 'typeof ' + ast.expr.visitExpression(this, null); }
+  visitUnaryOperatorExpr(ast: o.UnaryOperatorExpr) { return '-(' + ast.expr.visitExpression(this, null) + ')'; }
+  visitInstantiateExpr(ast: o.InstantiateExpr) { return 'new (' + ast.classExpr.visitExpression(this, null) + ')(' + ast.args.map((a: any) => a.visitExpression(this, null)).join(', ') + ')'; }
+  visitCommaExpr(ast: o.CommaExpr) { return ast.parts.map((p: any) => p.visitExpression(this, null)).join(', '); }
+  visitParenthesizedExpr(ast: o.ParenthesizedExpr) { return '(' + ast.expr.visitExpression(this, null) + ')'; }
+  visitVoidExpr(ast: o.VoidExpr) { return 'void ' + ast.expr.visitExpression(this, null); }
+  visitDynamicImportExpr(ast: o.DynamicImportExpr) { return 'import(' + ast.url.visitExpression(this, null) + ')'; }
+  visitTemplateLiteralExpr(ast: o.TemplateLiteralExpr) { return '`' + ast.elements[0].text + ast.expressions.map((e: any, i: number) => '${' + e.visitExpression(this, null) + '}' + ast.elements[i + 1].text).join('') + '`'; }
+  visitTaggedTemplateLiteralExpr(ast: any) {
+    const elements = ast.template.elements;
+    const expressions = ast.template.expressions;
+    const head = elements[0].text;
+    const spans = expressions.map((e: any, i: number) => '${' + e.visitExpression(this, null) + '}' + elements[i + 1].text).join('');
+    return ast.tag.visitExpression(this, null) + '`' + head + spans + '`';
+  }
+  visitLocalizedString() { throw new Error('i18n not supported'); }
+  visitRegularExpressionLiteral(ast: any) { return '/' + (ast.body ?? ast.pattern) + '/' + ast.flags; }
+  visitTemplateLiteralElementExpr(ast: o.TemplateLiteralElementExpr) { return JSON.stringify(ast.text); }
+  // Statement visitors
+  visitReturnStmt(stmt: o.ReturnStatement) { return 'return ' + stmt.value.visitExpression(this, null) + ';'; }
+  visitExpressionStmt(stmt: o.ExpressionStatement) { return stmt.expr.visitExpression(this, null) + ';'; }
+  visitIfStmt(stmt: o.IfStmt) {
+    let s = 'if (' + stmt.condition.visitExpression(this, null) + ') {' + stmt.trueCase.map((s2: any) => s2.visitStatement(this, null)).join(' ') + '}';
+    if (stmt.falseCase.length) s += ' else {' + stmt.falseCase.map((s2: any) => s2.visitStatement(this, null)).join(' ') + '}';
+    return s;
+  }
+  visitDeclareVarStmt(stmt: o.DeclareVarStmt) {
+    const kw = stmt.hasModifier(o.StmtModifier.Final) ? 'const' : 'let';
+    return kw + ' ' + stmt.name + (stmt.value ? ' = ' + stmt.value.visitExpression(this, null) : '') + ';';
+  }
+  visitDeclareFunctionStmt(stmt: o.DeclareFunctionStmt) { return 'function ' + stmt.name + '(' + stmt.params.map((p: any) => p.name).join(', ') + ') {' + stmt.statements.map((s: any) => s.visitStatement(this, null)).join(' ') + '}'; }
+}
+
+const stringEmitter = new JSEmitter();
 
 /** Detect installed Angular major version for compatibility. Supports 19+. */
 const ANGULAR_MAJOR = (() => {
@@ -66,257 +200,251 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
   const registry = opts.registry;
   const resolvedStyles = opts.resolvedStyles;
   const resolvedInlineStyles = opts.resolvedInlineStyles;
-  let sourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
+  const origSourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
   const constantPool = new ConstantPool();
   const fileResourceImports: ts.ImportDeclaration[] = [];
   const resourceDependencies: string[] = [];
   const parseFile = new ParseSourceFile(sourceCode, fileName);
   const parseLoc = new ParseLocation(parseFile, 0, 0, 0);
   const typeSourceSpan = new ParseSourceSpan(parseLoc, parseLoc);
-  const typeOnlyImports = collectTypeOnlyImports(sourceFile);
+  const typeOnlyImports = collectTypeOnlyImports(origSourceFile);
 
   // Inject 'import * as i0 from "@angular/core"'
-  sourceFile = injectAngularImport(sourceFile);
+  const sourceFile = injectAngularImport(origSourceFile);
 
-  // Build a file-local selector map as fallback when no external registry is provided
+  // Build a file-local selector map as fallback when no external registry is provided.
+  // Skip the expensive extractMetadata scan when a registry covers all classes.
   const localSelectors = new Map<string, string>();
-  sourceFile.statements.forEach(stmt => {
-    if (ts.isClassDeclaration(stmt) && stmt.name) {
-      const meta = extractMetadata(ts.getDecorators(stmt)?.[0]);
-      if (meta?.selector) {
-        localSelectors.set(stmt.name.text, meta.selector.split(',')[0].trim());
+  if (!registry) {
+    sourceFile.statements.forEach(stmt => {
+      if (ts.isClassDeclaration(stmt) && stmt.name) {
+        const meta = extractMetadata(ts.getDecorators(stmt)?.[0]);
+        if (meta?.selector) {
+          localSelectors.set(stmt.name.text, meta.selector.split(',')[0].trim());
+        }
       }
-    }
-  });
+    });
+  }
 
   const bindingParser = makeBindingParser();
+  JSEmitter._currentSourceFile = origSourceFile;
 
-  const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
-    return (rootNode) => {
-      let anonCounter = 0;
-      const visitor = (node: ts.Node): ts.Node => {
-        if (ts.isClassDeclaration(node)) {
-          const className = node.name?.text || `_AnonymousClass${anonCounter++}`;
-          const decorators = ts.getDecorators(node);
-          if (!decorators || decorators.length === 0) return ts.visitEachChild(node, visitor, context);
+  // --- Direct walk: compile each Angular-decorated class and collect string outputs ---
+  // This replaces the previous ts.transform + printer.printNode approach.
+  // By emitting strings directly from the Angular output AST, we skip both
+  // ts.factory node creation and ts.Printer serialization (~4x faster).
+  interface ClassCompileResult {
+    ivyCode: string[];       // "static ɵfac = ...", "static ɵcmp = ...", etc.
+    decorators: ts.Decorator[];  // Angular decorators to remove
+    classEnd: number;        // Position of closing } in original source
+  }
+  const classResults: ClassCompileResult[] = [];
 
-          const ANGULAR_DECORATORS = ['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule'];
-          const angularDecorators = decorators.filter(dec => {
-            if (!ts.isCallExpression(dec.expression)) return false;
-            const name = dec.expression.expression.getText();
-            return ANGULAR_DECORATORS.includes(name);
-          });
+  const ANGULAR_DECORATORS = new Set(['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule']);
 
-          // Skip classes that have no Angular decorators
-          if (angularDecorators.length === 0) return ts.visitEachChild(node, visitor, context);
+  for (const stmt of origSourceFile.statements) {
+    // Handle export declarations wrapping classes
+    const node = ts.isExportDeclaration(stmt) ? undefined :
+      (ts.isClassDeclaration(stmt) ? stmt : undefined);
+    if (!node) continue;
 
-          let ivyProps: ts.ClassElement[] = [];
-          let targetType: FactoryTarget = FactoryTarget.Injectable;
+    const decorators = ts.getDecorators(node);
+    if (!decorators || decorators.length === 0) continue;
 
-          const classIdentifier = ts.factory.createIdentifier(className);
-          const classRef: o.R3Reference = {
-            value: new o.WrappedNodeExpr(classIdentifier),
-            type: new o.WrappedNodeExpr(classIdentifier)
-          };
+    const className = node.name?.text;
+    if (!className) continue;
 
-          angularDecorators.forEach(dec => {
-            const decoratorName = (dec.expression as ts.CallExpression).expression.getText();
-            const meta = extractMetadata(dec);
-            const sigs = detectSignals(node);
-            const fields = detectFieldDecorators(node);
-            const hostBindings = parseHostBindings(meta.hostRaw || {});
+    const angularDecorators = decorators.filter(dec => {
+      if (!ts.isCallExpression(dec.expression)) return false;
+      const name = dec.expression.expression.getText(origSourceFile);
+      return ANGULAR_DECORATORS.has(name);
+    });
+    if (angularDecorators.length === 0) continue;
 
-            // Merge host decorator bindings with host config object
-            const hostMetadata: o.R3HostMetadata = {
-              attributes: hostBindings.attributes,
-              listeners: { ...hostBindings.listeners, ...fields.hostListeners },
-              properties: { ...hostBindings.properties, ...fields.hostProperties },
-              specialAttributes: hostBindings.specialAttributes
-            };
+    const ivyCode: string[] = [];
+    let targetType: FactoryTarget = FactoryTarget.Injectable;
 
-            switch (decoratorName) {
-              case 'Component':
-                targetType = FactoryTarget.Component;
-                processResources();
-                // Angular runtime requires a selector even for routed components
-                if (!meta.selector) {
-                  meta.selector = `ng-component-${className.toLowerCase()}`;
-                }
+    const classIdentifier = ts.factory.createIdentifier(className);
+    const classRef: o.R3Reference = {
+      value: new o.WrappedNodeExpr(classIdentifier),
+      type: new o.WrappedNodeExpr(classIdentifier)
+    };
 
-                // Resolve component dependencies by looking up selectors from the registry.
-                // The global analysis plugin provides the registry; falls back to file-local scan.
-                // NgModule imports are expanded to their exported declarations.
-                const declarations: any[] = [];
-                for (const dep of (Array.isArray(meta.imports) ? meta.imports : [])) {
-                  const depClassName = dep.node.getText();
-                  const registryEntry = registry?.get(depClassName);
+    angularDecorators.forEach(dec => {
+      const decoratorName = (dec.expression as ts.CallExpression).expression.getText(origSourceFile);
+      const meta = extractMetadata(dec);
+      const sigs = detectSignals(node);
+      const fields = detectFieldDecorators(node);
+      const hostBindings = parseHostBindings(meta.hostRaw || {});
 
-                  // If importing an NgModule, expand its exports into individual declarations
-                  if (registryEntry?.kind === 'ngmodule' && registryEntry.exports) {
-                    for (const exportedName of registryEntry.exports) {
-                      const exportedEntry = registry?.get(exportedName);
-                      if (exportedEntry && exportedEntry.kind !== 'ngmodule') {
-                        const kind = exportedEntry.kind === 'pipe' ? 1 : 0;
-                        declarations.push({
-                          type: dep, // Reference the NgModule (Angular resolves at runtime)
-                          selector: exportedEntry.selector,
-                          kind,
-                          ...(kind === 1 ? { name: exportedEntry.pipeName } : {})
-                        });
-                      }
-                    }
-                    continue;
-                  }
+      const hostMetadata: o.R3HostMetadata = {
+        attributes: hostBindings.attributes,
+        listeners: { ...hostBindings.listeners, ...fields.hostListeners },
+        properties: { ...hostBindings.properties, ...fields.hostProperties },
+        specialAttributes: hostBindings.specialAttributes
+      };
 
-                  const selector = registryEntry?.selector ?? localSelectors.get(depClassName);
-                  const kind = registryEntry?.kind === 'pipe' ? 1 : 0; // 0=Directive, 1=Pipe
+      switch (decoratorName) {
+        case 'Component':
+          targetType = FactoryTarget.Component;
+          processResources();
+          if (!meta.selector) {
+            meta.selector = `ng-component-${className.toLowerCase()}`;
+          }
 
-                  // Unresolved dependencies (e.g. library components like RouterOutlet)
-                  // use a non-matching selector so they don't affect template instructions
-                  // but still appear in the dependencies array for runtime resolution.
+          const declarations: any[] = [];
+          for (const dep of (Array.isArray(meta.imports) ? meta.imports : [])) {
+            const depClassName = dep.node.getText();
+            const registryEntry = registry?.get(depClassName);
+
+            if (registryEntry?.kind === 'ngmodule' && registryEntry.exports) {
+              for (const exportedName of registryEntry.exports) {
+                const exportedEntry = registry?.get(exportedName);
+                if (exportedEntry && exportedEntry.kind !== 'ngmodule') {
+                  const kind = exportedEntry.kind === 'pipe' ? 1 : 0;
                   declarations.push({
                     type: dep,
-                    selector: selector || `_unresolved-${depClassName}`,
+                    selector: exportedEntry.selector,
                     kind,
-                    ...(kind === 1 ? { name: registryEntry?.pipeName } : {})
+                    ...(kind === 1 ? { name: exportedEntry.pipeName } : {})
                   });
                 }
+              }
+              continue;
+            }
 
-                // Resolve template content: inline template or read from templateUrl
-                let templateContent = meta.template || '';
-                if (!templateContent && meta.templateUrl) {
-                  try {
-                    const templatePath = path.resolve(path.dirname(fileName), meta.templateUrl);
-                    templateContent = fs.readFileSync(templatePath, 'utf-8');
-                    resourceDependencies.push(templatePath);
-                  } catch {
-                    console.warn(`[angular-compiler] Could not read template file "${meta.templateUrl}" for ${className}`);
-                  }
-                }
+            const selector = registryEntry?.selector ?? localSelectors.get(depClassName);
+            const kind = registryEntry?.kind === 'pipe' ? 1 : 0;
+            declarations.push({
+              type: dep,
+              selector: selector || `_unresolved-${depClassName}`,
+              kind,
+              ...(kind === 1 ? { name: registryEntry?.pipeName } : {})
+            });
+          }
 
-                // Resolve styles: read styleUrl/styleUrls files and inline their content.
-                // Preprocessed styles (SCSS→CSS) are provided via resolvedStyles map.
-                if (Array.isArray(meta.styleUrls)) {
-                  for (const url of meta.styleUrls) {
-                    try {
-                      const stylePath = path.resolve(path.dirname(fileName), url);
-                      const styleContent = resolvedStyles?.get(stylePath)
-                        ?? fs.readFileSync(stylePath, 'utf-8');
-                      meta.styles.push(styleContent);
-                      resourceDependencies.push(stylePath);
-                    } catch {
-                      console.warn(`[angular-compiler] Could not read style file "${url}" for ${className}`);
-                    }
-                  }
-                }
+          let templateContent = meta.template || '';
+          if (!templateContent && meta.templateUrl) {
+            try {
+              const templatePath = path.resolve(path.dirname(fileName), meta.templateUrl);
+              templateContent = fs.readFileSync(templatePath, 'utf-8');
+              resourceDependencies.push(templatePath);
+            } catch {
+              console.warn(`[angular-compiler] Could not read template file "${meta.templateUrl}" for ${className}`);
+            }
+          }
 
-                // Apply pre-processed inline styles (SCSS→CSS from plugin)
-                // Must happen before compileComponentFromMetadata which runs ShadowCss
-                if (resolvedInlineStyles) {
-                  for (const [idx, css] of resolvedInlineStyles) {
-                    if (idx < meta.styles.length) {
-                      meta.styles[idx] = css;
-                    }
-                  }
-                }
+          if (Array.isArray(meta.styleUrls)) {
+            for (const url of meta.styleUrls) {
+              try {
+                const stylePath = path.resolve(path.dirname(fileName), url);
+                const styleContent = resolvedStyles?.get(stylePath)
+                  ?? fs.readFileSync(stylePath, 'utf-8');
+                meta.styles.push(styleContent);
+                resourceDependencies.push(stylePath);
+              } catch {
+                console.warn(`[angular-compiler] Could not read style file "${url}" for ${className}`);
+              }
+            }
+          }
 
-                const parsedTemplate = parseTemplate(templateContent, fileName, { preserveWhitespaces: meta.preserveWhitespaces });
+          if (resolvedInlineStyles) {
+            for (const [idx, css] of resolvedInlineStyles) {
+              if (idx < meta.styles.length) {
+                meta.styles[idx] = css;
+              }
+            }
+          }
 
-                // Merge inputs: decorator config < @Input field decorators < signal inputs
-                const ivyInputs: Record<string, any> = {};
+          const parsedTemplate = parseTemplate(templateContent, fileName, { preserveWhitespaces: meta.preserveWhitespaces });
 
-                // Handle config inputs (from @Component({ inputs: [...] }))
-                if (Array.isArray(meta.inputs)) {
-                  meta.inputs.forEach((i: string) => ivyInputs[i] = i);
-                } else if (meta.inputs) {
-                  Object.assign(ivyInputs, meta.inputs);
-                }
+          const ivyInputs: Record<string, any> = {};
+          if (Array.isArray(meta.inputs)) {
+            meta.inputs.forEach((i: string) => ivyInputs[i] = i);
+          } else if (meta.inputs) {
+            Object.assign(ivyInputs, meta.inputs);
+          }
+          Object.assign(ivyInputs, fields.inputs);
+          for (const [key, val] of Object.entries(sigs.inputs)) {
+            const sigDesc = val as any;
+            ivyInputs[key] = {
+              classPropertyName: key,
+              bindingPropertyName: key,
+              isSignal: true,
+              required: sigDesc.required || false,
+              transformFunction: sigDesc.transform || null,
+            };
+          }
+          if (parsedTemplate.errors) {
+            console.log(parsedTemplate.errors);
+            return '' as any;
+          }
 
-                // Handle @Input() field decorators
-                Object.assign(ivyInputs, fields.inputs);
+          const componentMeta: any = {
+            ...meta,
+            name: className,
+            type: classRef,
+            typeSourceSpan,
+            declarations,
+            template: {
+              nodes: parsedTemplate.nodes,
+              ngContentSelectors: parsedTemplate.ngContentSelectors,
+              preserveWhitespaces: parsedTemplate.preserveWhitespaces
+            },
+            styles: meta.styles,
+            inputs: ivyInputs,
+            outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
+            viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
+            queries: [...fields.contentQueries, ...sigs.contentQueries],
+            host: hostMetadata,
+            changeDetection: meta.changeDetection,
+            encapsulation: meta.encapsulation,
+            exportAs: meta.exportAs,
+            providers: meta.providers?.length ? new o.LiteralArrayExpr(meta.providers) : null,
+            viewProviders: meta.viewProviders?.length ? new o.LiteralArrayExpr(meta.viewProviders) : null,
+            animations: meta.animations?.length ? new o.LiteralArrayExpr(meta.animations) : null,
+            isStandalone: meta.standalone,
+            imports: meta.imports,
+            lifecycle: { usesOnChanges: false },
+            defer: {
+              mode: 0,
+              blocks: buildDeferDependencyMap(parsedTemplate, sourceFile, registry, localSelectors).blocks,
+            },
+            declarationListEmitMode: 0,
+            relativeContextFilePath: fileName,
+            controlCreate: null,
+          };
 
-                // Handle Signal/Model inputs (take precedence)
-                for (const [key, val] of Object.entries(sigs.inputs)) {
-                  const sigDesc = val as any;
-                  ivyInputs[key] = {
-                    classPropertyName: key,
-                    bindingPropertyName: key,
-                    isSignal: true,
-                    required: sigDesc.required || false,
-                    transformFunction: sigDesc.transform || null,
-                  };
-                }
-                if (parsedTemplate.errors) {
-                  console.log(parsedTemplate.errors);
-                  return '';
-                }
+          if (ANGULAR_MAJOR >= 20) {
+            componentMeta.hasDirectiveDependencies = declarations.length > 0;
+          }
 
-                const componentMeta: any = {
-                  ...meta,
-                  name: className,
-                  type: classRef,
-                  typeSourceSpan,
-                  declarations,
-                  template: {
-                    nodes: parsedTemplate.nodes,
-                    ngContentSelectors: parsedTemplate.ngContentSelectors,
-                    preserveWhitespaces: parsedTemplate.preserveWhitespaces
-                  },
-                  styles: meta.styles,
-                  inputs: ivyInputs,
-                  outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
-                  viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
-                  queries: [...fields.contentQueries, ...sigs.contentQueries],
-                  host: hostMetadata,
-                  changeDetection: meta.changeDetection,
-                  encapsulation: meta.encapsulation,
-                  exportAs: meta.exportAs,
-                  providers: meta.providers?.length ? new o.LiteralArrayExpr(meta.providers) : null,
-                  viewProviders: meta.viewProviders?.length ? new o.LiteralArrayExpr(meta.viewProviders) : null,
-                  animations: meta.animations?.length ? new o.LiteralArrayExpr(meta.animations) : null,
-                  isStandalone: meta.standalone,
-                  imports: meta.imports,
-                  lifecycle: { usesOnChanges: false },
-                  defer: {
-                    mode: 0, // PerBlock
-                    blocks: buildDeferDependencyMap(parsedTemplate, sourceFile, registry, localSelectors).blocks,
-                  },
-                  declarationListEmitMode: 0, // Direct
-                  relativeContextFilePath: fileName,
-                };
+          const cmp = compileComponentFromMetadata(componentMeta, constantPool, bindingParser);
+          ivyCode.push(`static ɵcmp = ${emitAngularExpr(cmp.expression)}`);
+          break;
 
-                // Angular 20+: hasDirectiveDependencies controls Full vs DomOnly template mode
-                if (ANGULAR_MAJOR >= 20) {
-                  componentMeta.hasDirectiveDependencies = declarations.length > 0;
-                }
+        case 'Directive':
+          targetType = FactoryTarget.Directive;
+          const dir = compileDirectiveFromMetadata({
+            ...meta, name: className, type: classRef, typeSourceSpan, host: hostMetadata,
+            inputs: { ...meta.inputs, ...fields.inputs, ...sigs.inputs },
+            outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
+            viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
+            queries: [...fields.contentQueries, ...sigs.contentQueries],
+            providers: meta.providers, exportAs: meta.exportAs, isStandalone: meta.standalone,
+            lifecycle: { usesOnChanges: false },
+          }, constantPool, bindingParser);
+          ivyCode.push(`static ɵdir = ${emitAngularExpr(dir.expression)}`);
+          break;
 
-
-                const cmp = compileComponentFromMetadata(componentMeta, constantPool, bindingParser);
-                ivyProps.push(createStaticProperty('ɵcmp', translateOutputAST(cmp.expression)));
-                break;
-
-              case 'Directive':
-                targetType = FactoryTarget.Directive;
-                const dir = compileDirectiveFromMetadata({
-                  ...meta, name: className, type: classRef, typeSourceSpan, host: hostMetadata,
-                  inputs: { ...meta.inputs, ...fields.inputs, ...sigs.inputs },
-                  outputs: { ...meta.outputs, ...fields.outputs, ...sigs.outputs },
-                  viewQueries: [...fields.viewQueries, ...sigs.viewQueries],
-                  queries: [...fields.contentQueries, ...sigs.contentQueries],
-                  providers: meta.providers, exportAs: meta.exportAs, isStandalone: meta.standalone,
-                  lifecycle: { usesOnChanges: false },
-                }, constantPool, bindingParser);
-                ivyProps.push(createStaticProperty('ɵdir', translateOutputAST(dir.expression)));
-                break;
-
-              case 'Pipe':
-                targetType = FactoryTarget.Pipe;
-                const pipe = compilePipeFromMetadata({
-                  ...meta, name: className, pipeName: meta.name, type: classRef,
-                  isStandalone: meta.standalone, pure: meta.pure ?? true
-                });
-                ivyProps.push(createStaticProperty('ɵpipe', translateOutputAST(pipe.expression)));
-                break;
+        case 'Pipe':
+          targetType = FactoryTarget.Pipe;
+          const pipe = compilePipeFromMetadata({
+            ...meta, name: className, pipeName: meta.name, type: classRef,
+            isStandalone: meta.standalone, pure: meta.pure ?? true
+          });
+          ivyCode.push(`static ɵpipe = ${emitAngularExpr(pipe.expression)}`);
+          break;
 
               case 'Injectable':
                 targetType = FactoryTarget.Injectable;
@@ -329,7 +457,7 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
                     forwardRef: 0
                   },
                 }, true);
-                ivyProps.push(createStaticProperty('ɵprov', translateOutputAST(inj.expression)));
+                ivyCode.push(`static ɵprov = ${emitAngularExpr(inj.expression)}`);
                 break;
 
               case 'NgModule':
@@ -353,41 +481,26 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
                   schemas: [],
                   id: null,
                 });
-                ivyProps.push(createStaticProperty('ɵmod', translateOutputAST(ngMod.expression)));
+                ivyCode.push(`static ɵmod = ${emitAngularExpr(ngMod.expression)}`);
 
-                // Compile the injector (providers + imports)
                 const injector = compileInjector({
                   name: className,
                   type: classRef,
                   providers: meta.providers ? new o.LiteralArrayExpr(meta.providers) : null,
                   imports: ngModuleImports.map((e: o.WrappedNodeExpr<any>) => e),
                 });
-                ivyProps.push(createStaticProperty('ɵinj', translateOutputAST(injector.expression)));
+                ivyCode.push(`static ɵinj = ${emitAngularExpr(injector.expression)}`);
                 break;
             }
           });
 
+          // Generate factory
           const deps = extractConstructorDeps(node, typeOnlyImports);
           if (deps === null) {
-            // Inherited factory: class extends Parent without own constructor
-            // Emit: ɵfac = (() => { let base; return (t) => (base || (base = i0.ɵɵgetInheritedFactory(Class)))(t || Class); })()
             const baseVar = `ɵ${className}_BaseFactory`;
-            const facCode = `/*@__PURE__*/ (() => { let ${baseVar}; return function ${className}_Factory(__ngFactoryType__) { return (${baseVar} || (${baseVar} = i0.ɵɵgetInheritedFactory(${className})))(__ngFactoryType__ || ${className}); }; })()`;
-            ivyProps.unshift(ts.factory.createPropertyDeclaration(
-              [ts.factory.createModifier(ts.SyntaxKind.StaticKeyword)],
-              'ɵfac',
-              undefined, undefined,
-              ts.factory.createIdentifier(facCode) // Will be printed as-is
-            ));
+            ivyCode.unshift(`static ɵfac = /*@__PURE__*/ (() => { let ${baseVar}; return function ${className}_Factory(__ngFactoryType__) { return (${baseVar} || (${baseVar} = i0.ɵɵgetInheritedFactory(${className})))(__ngFactoryType__ || ${className}); }; })()`);
           } else if (deps === 'invalid') {
-            // Invalid factory: type-only imports can't be injected
-            const facCode = `function ${className}_Factory(__ngFactoryType__) { i0.ɵɵinvalidFactory(); }`;
-            ivyProps.unshift(ts.factory.createPropertyDeclaration(
-              [ts.factory.createModifier(ts.SyntaxKind.StaticKeyword)],
-              'ɵfac',
-              undefined, undefined,
-              ts.factory.createIdentifier(facCode)
-            ));
+            ivyCode.unshift(`static ɵfac = function ${className}_Factory(__ngFactoryType__) { i0.ɵɵinvalidFactory(); }`);
           } else {
             const fac = compileFactoryFunction({
               name: className,
@@ -396,13 +509,13 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
               deps,
               target: targetType,
             });
-            ivyProps.unshift(createStaticProperty('ɵfac', translateOutputAST(fac.expression)));
+            ivyCode.unshift(`static ɵfac = ${emitAngularExpr(fac.expression)}`);
           }
 
           // Emit setClassMetadata for runtime decorator reflection (devMode only)
           angularDecorators.forEach(dec => {
             const call = dec.expression as ts.CallExpression;
-            const decName = call.expression.getText();
+            const decName = call.expression.getText(origSourceFile);
             const decArgsNode = call.arguments[0];
 
             try {
@@ -419,68 +532,29 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
               });
               constantPool.statements.push(new o.ExpressionStatement(classMetadataExpr));
             } catch {
-              // Skip if compileClassMetadata fails (e.g., unsupported metadata shape)
+              // Skip if compileClassMetadata fails
             }
           });
 
-          const angularDecSet = new Set(angularDecorators);
-          return ts.factory.updateClassDeclaration(
-            node,
-            node.modifiers?.filter(m => !ts.isDecorator(m) || !angularDecSet.has(m)),
-            node.name || ts.factory.createIdentifier(className),
-            node.typeParameters,
-            node.heritageClauses,
-            [...node.members, ...ivyProps]
-          );
-        }
-        return ts.visitEachChild(node, visitor, context);
-      };
-      return ts.visitNode(rootNode, visitor) as ts.SourceFile;
-    };
-  };
+          classResults.push({
+            ivyCode,
+            decorators: angularDecorators,
+            classEnd: node.getEnd(),
+          });
+  }
 
-  // Instead of ts.Printer (which loses positions), use MagicString to
-  // make surgical edits on the original source for accurate source maps.
+  // Apply edits via MagicString
   const ms = new MagicString(sourceCode, { filename: fileName });
-  const printer = ts.createPrinter({ removeComments: true });
-
-  // Use the original (pre-i0-injection) source file for position lookups
-  const origSourceFile = ts.createSourceFile(fileName, sourceCode, ts.ScriptTarget.Latest, true);
 
   // 1. Prepend i0 import
   ms.prepend('import * as i0 from "@angular/core";\n');
 
-  // 2. Apply the transform to get the compiled static fields,
-  //    but use MagicString for the actual edits
-  const result = ts.transform(sourceFile, [transformer]);
-  const transformedFile = result.transformed[0];
-
-  // Walk the original and transformed ASTs in parallel to find edits
-  for (let i = 0; i < origSourceFile.statements.length; i++) {
-    const origStmt = origSourceFile.statements[i];
-    // Find corresponding transformed statement (offset by 1 due to injected i0 import)
-    const transStmt = transformedFile.statements[i + 1];
-
-    if (!ts.isClassDeclaration(origStmt) || !ts.isClassDeclaration(transStmt)) continue;
-    if (!ts.getDecorators(origStmt)?.length) continue;
-
-    // Check if this class was transformed (has ivyProps)
-    const origMemberCount = origStmt.members.length;
-    const transMemberCount = transStmt.members.length;
-    if (transMemberCount <= origMemberCount) continue; // No new members added
-
-    // Remove Angular decorators from original source
-    const angularDecs = ts.getDecorators(origStmt)?.filter(dec => {
-      if (!ts.isCallExpression(dec.expression)) return false;
-      const name = dec.expression.expression.getText(origSourceFile);
-      return ['Component', 'Directive', 'Pipe', 'Injectable', 'NgModule'].includes(name);
-    }) || [];
-
-    for (const dec of angularDecs) {
-      // Remove from @ to end of decorator call, including trailing whitespace
+  // 2. For each compiled class: remove decorators + insert Ivy definitions
+  for (const cr of classResults) {
+    // Remove Angular decorators from source
+    for (const dec of cr.decorators) {
       const start = dec.getStart(origSourceFile);
       const end = dec.getEnd();
-      // Find the next non-whitespace after the decorator
       let trimEnd = end;
       while (trimEnd < sourceCode.length && (sourceCode[trimEnd] === ' ' || sourceCode[trimEnd] === '\n' || sourceCode[trimEnd] === '\r')) {
         trimEnd++;
@@ -488,22 +562,15 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
       ms.remove(start, trimEnd);
     }
 
-    // Print the new static members (ɵfac, ɵcmp, etc.) and insert before closing }
-    const addedMembers = transStmt.members.slice(origMemberCount);
-    if (addedMembers.length > 0) {
-      const memberCode = addedMembers
-        .map(m => '  ' + printer.printNode(ts.EmitHint.Unspecified, m, transformedFile))
-        .join('\n');
-
-      // Find the closing brace of the original class
-      const classEnd = origStmt.getEnd();
-      // Insert before the closing }
-      ms.appendLeft(classEnd - 1, '\n' + memberCode + '\n');
+    // Insert static members before closing }
+    if (cr.ivyCode.length > 0) {
+      const memberCode = cr.ivyCode.map(c => '  ' + c + ';').join('\n');
+      ms.appendLeft(cr.classEnd - 1, '\n' + memberCode + '\n');
     }
   }
 
-  // 3. Append constant pool statements
-  const constants = constantPool.statements.map(s => translateOutputASTStatement(s, printer, origSourceFile)).join('\n');
+  // 3. Append constant pool statements (setClassMetadata, etc.)
+  const constants = constantPool.statements.map(s => emitAngularStmt(s)).join('\n');
   if (constants) {
     ms.append('\n\n' + constants);
   }
@@ -522,19 +589,14 @@ export function compile(sourceCode: string, fileName: string, optionsOrRegistry?
   };
 }
 
-/** * EXHAUSTIVE EXPRESSION TRANSLATION
- */
-function translateOutputAST(expr: o.Expression): ts.Expression {
-  return expr.visitExpression(translator, null);
+/** Emit Angular output AST expression directly to a JavaScript string. */
+function emitAngularExpr(expr: o.Expression): string {
+  return expr.visitExpression(stringEmitter, null);
 }
 
-/** * EXHAUSTIVE STATEMENT TRANSLATION
- */
-function translateOutputASTStatement(stmt: o.Statement, printer: ts.Printer, sf: ts.SourceFile): string {
-  const tsNode = stmt.visitStatement(translator, null);
-
-  // Printer expects a Node, visitStatement returns one.
-  return printer.printNode(ts.EmitHint.Unspecified, tsNode as ts.Statement, sf);
+/** Emit Angular output AST statement directly to a JavaScript string. */
+function emitAngularStmt(stmt: o.Statement): string {
+  return stmt.visitStatement(stringEmitter, null);
 }
 
 /** * METADATA & RESOURCE HELPERS

@@ -265,10 +265,16 @@ export function angular(options: AngularPluginOptions = {}): Plugin[] {
 
         let outputCode = result.code;
 
-        // Append HMR code in dev mode for component files
+        // Append HMR code in dev mode for component files.
+        // Use the registry (already populated by buildStart/scanSingleFile) instead of
+        // re-parsing the file with scanFile — avoids a redundant OXC parse per transform.
         if (isServe) {
-          const entries = scanFile(code, id);
-          const components = entries.filter(e => e.kind === 'component');
+          const components: RegistryEntry[] = [];
+          for (const entry of registry.values()) {
+            if (entry.fileName === id && entry.kind === 'component') {
+              components.push(entry);
+            }
+          }
           if (components.length > 0) {
             outputCode += generateHmrCode(components);
           }

@@ -1,7 +1,7 @@
 {
   "name": "@analogjs/angular-compiler",
   "version": "0.1.0",
-  "description": "Lightweight Angular compiler for Vite — transforms decorators and signals into Ivy definitions without a full TypeScript program",
+  "description": "Lightweight compiler for Angular",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
