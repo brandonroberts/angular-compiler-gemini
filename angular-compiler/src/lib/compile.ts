@@ -719,9 +719,19 @@ function detectSignals(node: ts.ClassDeclaration) {
         else contentQueries.push(query);
       }
 
-      // 4. STANDARD OUTPUTS
-      else if (callExpr.includes('output')) {
-        outputs[name] = name;
+      // 4. STANDARD OUTPUTS (output() and outputFromObservable())
+      else if (callExpr.includes('output') || callExpr.includes('outputFromObservable')) {
+        // Extract alias from options: output({alias: 'publicName'})
+        let alias = name;
+        const optArg = m.initializer.arguments[0];
+        if (optArg && ts.isObjectLiteralExpression(optArg)) {
+          for (const prop of optArg.properties) {
+            if (ts.isPropertyAssignment(prop) && prop.name.getText() === 'alias' && ts.isStringLiteral(prop.initializer)) {
+              alias = prop.initializer.text;
+            }
+          }
+        }
+        outputs[name] = alias;
       }
     }
   });
