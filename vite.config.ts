@@ -1,7 +1,7 @@
 /// <reference types="vitest" />
 
 import { defineConfig, DepOptimizationConfig } from 'vite';
-import { globalAnalysisPlugin } from './angular-compiler/src/lib/global-analysis-plugin';
+import { angular } from './angular-compiler/src/lib/angular';
 import { JavaScriptTransformer } from '@angular/build/private';
 
 type EsbuildOptions = NonNullable<DepOptimizationConfig['esbuildOptions']>;
@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => ({
     mainFields: ['module'],
   },
   plugins: [
-    globalAnalysisPlugin(),
+    angular(),
   ],
   test: {
     globals: true,

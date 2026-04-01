@@ -73,7 +73,7 @@ export interface AngularPluginOptions {
   inlineStyleLanguage?: 'scss' | 'sass' | 'less' | 'styl' | 'css';
 }
 
-export function globalAnalysisPlugin(options: AngularPluginOptions = {}): Plugin {
+export function angular(options: AngularPluginOptions = {}): Plugin {
   const opts = options;
   const inlineStyleLanguage = opts.inlineStyleLanguage || 'scss';
   const registry: ComponentRegistry = new Map();
