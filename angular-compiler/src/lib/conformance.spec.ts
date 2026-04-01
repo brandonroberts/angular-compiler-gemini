@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { compile } from './compile';
+import { compile, type CompileOptions } from './compile';
+import { scanFile, type ComponentRegistry } from './registry';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -130,6 +131,21 @@ describe.skipIf(!angularAvailable)('Angular Compliance Tests', () => {
         }
 
         it(tc.description, () => {
+          // Build a registry from all .ts files in the test directory
+          // so cross-file references (e.g. @defer deps) can be resolved
+          const registry: ComponentRegistry = new Map();
+          try {
+            const allTsFiles = fs.readdirSync(categoryDir)
+              .filter(f => f.endsWith('.ts') && !f.endsWith('.spec.ts'));
+            for (const f of allTsFiles) {
+              const code = loadFile(categoryDir, f);
+              if (!code) continue;
+              for (const entry of scanFile(code, path.join(categoryDir, f))) {
+                registry.set(entry.className, entry);
+              }
+            }
+          } catch { /* ignore scan errors */ }
+
           // Load and compile all input files
           for (const inputFile of tc.inputFiles) {
             if (!inputFile) { results.skip++; continue; }
@@ -141,7 +157,7 @@ describe.skipIf(!angularAvailable)('Angular Compliance Tests', () => {
 
             let compiled: string;
             try {
-              const result = compile(inputCode, path.join(categoryDir, inputFile));
+              const result = compile(inputCode, path.join(categoryDir, inputFile), { registry });
               compiled = result.code;
             } catch (e: any) {
               // Some test cases use features we don't support — record as error
