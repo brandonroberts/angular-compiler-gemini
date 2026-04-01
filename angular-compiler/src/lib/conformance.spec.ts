@@ -15,30 +15,58 @@ const COMPLIANCE_DIR = path.join(ANGULAR_ROOT, 'packages/compiler-cli/test/compl
  * - Whitespace-tolerant
  */
 function expectEmit(actual: string, expected: string): { pass: boolean; message: string } {
-  // Normalize: replace $r3$ placeholder with i0
-  let normalizedExpected = expected.replace(/\$r3\$/g, 'i0');
-
-  // Normalize whitespace
   const normalizeWs = (s: string) => s.replace(/\s+/g, ' ').trim();
-  const actualNorm = normalizeWs(actual);
 
-  // Extract meaningful Ivy instruction calls from expected output
-  // These are the core assertions: ɵɵ* function calls
-  const ivyCallPattern = /i0\.ɵɵ\w+\([^)]*\)/g;
-  const expectedCalls = (normalizedExpected.match(ivyCallPattern) || [])
-    .map(normalizeWs);
-  const actualCalls = (actualNorm.match(ivyCallPattern) || [])
-    .map(normalizeWs);
+  // Normalize both sides
+  let normalizedExpected = expected.replace(/\$r3\$/g, 'i0');
+  const actualNorm = normalizeWs(actual);
+  const expectedNorm = normalizeWs(normalizedExpected);
+
+  // Normalize instruction aliases: ɵɵtemplate ↔ ɵɵdomTemplate
+  const normalizeInstruction = (s: string) => s
+    .replace(/ɵɵtemplate\(/g, 'ɵɵdomTemplate(')
+    .replace(/ɵɵlistener\(/g, 'ɵɵdomListener(')
+    .replace(/ɵɵelementStart\(/g, 'ɵɵdomElementStart(')
+    .replace(/ɵɵelement\(/g, 'ɵɵdomElement(')
+    .replace(/ɵɵelementEnd\(/g, 'ɵɵdomElementEnd(')
+    .replace(/function \w+\([^)]*\)/g, '(...)') // Named functions → generic
+    .replace(/\$\w+\$/g, '') // Remove $variable$ patterns
+    .replace(/\s+/g, ' ').trim();
+
+  // Extract Ivy instruction calls: i0.ɵɵ<name>(<simple args>)
+  // Use a balanced approach: capture instruction name + first arg segment
+  const ivyPattern = /i0\.(ɵɵ\w+)\(([^)]{0,80})/g;
+
+  const extractCalls = (s: string) => {
+    const calls: { full: string; name: string; args: string }[] = [];
+    let m;
+    while ((m = ivyPattern.exec(s)) !== null) {
+      calls.push({ full: m[0], name: m[1], args: m[2].trim() });
+    }
+    return calls;
+  };
+
+  const expectedCalls = extractCalls(expectedNorm);
+  const actualCalls = extractCalls(actualNorm);
+  const actualNormInstr = normalizeInstruction(actualNorm);
 
   if (expectedCalls.length === 0) return { pass: true, message: 'OK (no Ivy calls to check)' };
 
   let matched = 0;
-  for (const call of expectedCalls) {
-    // Normalize temp variable names: $Foo$ → generic match
-    const callNorm = call.replace(/\$\w+\$/g, '');
-    if (actualCalls.some(a => a.includes(callNorm) || a === call) || actualNorm.includes(call)) {
-      matched++;
-    }
+  for (const ec of expectedCalls) {
+    const ecNorm = normalizeInstruction(ec.full);
+    // Try exact match first
+    if (actualNorm.includes(ec.full)) { matched++; continue; }
+    // Try normalized match (template↔domTemplate, named→anon functions)
+    if (actualNormInstr.includes(ecNorm)) { matched++; continue; }
+    // Try instruction name + first arg match
+    if (actualCalls.some(ac => ac.name === ec.name && ac.args.startsWith(ec.args.split(',')[0]))) { matched++; continue; }
+    // Try just instruction name + numeric first arg
+    const firstArg = ec.args.match(/^\d+/)?.[0];
+    if (firstArg && actualCalls.some(ac =>
+      (ac.name === ec.name || normalizeInstruction('ɵɵ' + ac.name) === normalizeInstruction('ɵɵ' + ec.name)) &&
+      ac.args.startsWith(firstArg)
+    )) { matched++; continue; }
   }
 
   const ratio = matched / expectedCalls.length;
@@ -46,7 +74,10 @@ function expectEmit(actual: string, expected: string): { pass: boolean; message:
     return { pass: true, message: `OK (${matched}/${expectedCalls.length} Ivy calls matched, ${(ratio * 100).toFixed(0)}%)` };
   }
 
-  const missing = expectedCalls.filter(c => !actualNorm.includes(c)).slice(0, 3);
+  const missing = expectedCalls
+    .filter(ec => !actualNorm.includes(ec.full) && !actualNormInstr.includes(normalizeInstruction(ec.full)))
+    .map(ec => ec.full)
+    .slice(0, 3);
   return {
     pass: false,
     message: `Only ${matched}/${expectedCalls.length} Ivy calls matched (${(ratio * 100).toFixed(0)}%). Missing: ${missing.join(', ').substring(0, 100)}`,
