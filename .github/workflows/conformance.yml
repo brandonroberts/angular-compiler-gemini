@@ -1,0 +1,39 @@
+name: Angular Conformance Tests
+
+on:
+  push:
+    branches: [main, feat/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        angular-version: ['19.0.0', '20.0.0', '21.0.0']
+
+    name: Angular v${{ matrix.angular-version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Angular ${{ matrix.angular-version }} compliance fixtures
+        run: bash scripts/setup-conformance.sh ${{ matrix.angular-version }}
+
+      - name: Run conformance tests
+        env:
+          ANGULAR_SOURCE_DIR: .angular-conformance
+        run: npx vitest run angular-compiler/src/lib/conformance.spec.ts
+
+      - name: Run compiler tests
+        run: npx vitest run angular-compiler/ --exclude='**/conformance.spec.ts'

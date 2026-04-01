@@ -4,7 +4,8 @@ import { scanFile, type ComponentRegistry } from './registry';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-const ANGULAR_ROOT = path.resolve(process.env.HOME!, 'projects/angular/angular');
+const ANGULAR_ROOT = process.env.ANGULAR_SOURCE_DIR
+  || path.resolve(process.env.HOME!, 'projects/angular/angular');
 const COMPLIANCE_DIR = path.join(ANGULAR_ROOT, 'packages/compiler-cli/test/compliance/test_cases');
 
 /**
