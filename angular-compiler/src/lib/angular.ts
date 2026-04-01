@@ -212,6 +212,13 @@ export function angular(options: AngularPluginOptions = {}): Plugin[] {
 
     config(_config, { command }) {
       isServe = command === 'serve';
+      return {
+        optimizeDeps: {
+          rolldownOptions: {
+            plugins: [optimizerPlugin()],
+          },
+        },
+      };
     },
 
     configResolved(config) {
