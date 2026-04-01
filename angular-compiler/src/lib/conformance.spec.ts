@@ -150,6 +150,7 @@ describe.skipIf(!angularAvailable)('Angular Compliance Tests', () => {
         it(tc.description, () => {
           // Load and compile all input files
           for (const inputFile of tc.inputFiles) {
+            if (!inputFile) { results.skip++; continue; }
             const inputCode = loadFile(categoryDir, inputFile);
             if (!inputCode) {
               results.skip++;
@@ -172,6 +173,7 @@ describe.skipIf(!angularAvailable)('Angular Compliance Tests', () => {
             for (const expectation of tc.expectations) {
               if (!expectation.files || !Array.isArray(expectation.files)) continue;
               for (const file of expectation.files) {
+                if (!file?.expected) continue;
                 const expectedCode = loadFile(categoryDir, file.expected);
                 if (!expectedCode) continue;
 
