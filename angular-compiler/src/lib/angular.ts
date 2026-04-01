@@ -218,7 +218,7 @@ export function angular(options: AngularPluginOptions = {}): Plugin[] {
             plugins: [optimizerPlugin()],
           },
         },
-      };
+      } as any;
     },
 
     configResolved(config) {

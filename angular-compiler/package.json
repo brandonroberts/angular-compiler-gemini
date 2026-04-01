@@ -1,0 +1,52 @@
+{
+  "name": "@analogjs/angular-compiler",
+  "version": "0.1.0",
+  "description": "Lightweight Angular compiler for Vite — transforms decorators and signals into Ivy definitions without a full TypeScript program",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@angular/build": ">=19.0.0",
+    "@angular/compiler": ">=19.0.0",
+    "@angular/compiler-cli": ">=19.0.0",
+    "vite": ">=6.0.0"
+  },
+  "dependencies": {
+    "magic-string": "^0.30.0",
+    "oxc-parser": "^0.121.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "~5.9.0"
+  },
+  "keywords": [
+    "angular",
+    "compiler",
+    "vite",
+    "vite-plugin",
+    "ivy",
+    "signals",
+    "analogjs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brandonroberts/angular-compiler-gemini"
+  }
+}
