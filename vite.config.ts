@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => ({
     mainFields: ['module'],
   },
   plugins: [
-    globalAnalysisPlugin(['src']),
+    globalAnalysisPlugin(),
   ],
   test: {
     globals: true,

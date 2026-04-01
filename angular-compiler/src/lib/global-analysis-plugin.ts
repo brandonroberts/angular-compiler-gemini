@@ -67,16 +67,14 @@ if (import.meta.hot) {
  * HMR:                  Rescan changed files and invalidate dependents.
  */
 export interface AngularPluginOptions {
-  /** Path to tsconfig file. Default: 'tsconfig.app.json', falls back to 'tsconfig.json'. */
+  /** Path to tsconfig file. Default: 'tsconfig.app.json'. */
   tsconfig?: string;
-  /** @deprecated Use tsconfig instead. Source directories to scan. */
-  srcDirs?: string[];
   /** File extension for inline style preprocessing. Default: 'scss'. Set to 'less', 'sass', 'styl', or 'css' (no preprocessing). */
   inlineStyleLanguage?: 'scss' | 'sass' | 'less' | 'styl' | 'css';
 }
 
-export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = {}): Plugin {
-  const opts: AngularPluginOptions = Array.isArray(options) ? { srcDirs: options } : options;
+export function globalAnalysisPlugin(options: AngularPluginOptions = {}): Plugin {
+  const opts = options;
   const inlineStyleLanguage = opts.inlineStyleLanguage || 'scss';
   const registry: ComponentRegistry = new Map();
   // Track which files import which classes, for HMR invalidation
@@ -183,31 +181,16 @@ export function globalAnalysisPlugin(options: AngularPluginOptions | string[] = 
 
     try {
       const config = readConfiguration(tsconfigPath);
-      if (config.rootNames.length > 0) {
-        return config.rootNames.filter(f =>
-          !f.includes('node_modules') &&
-          f.endsWith('.ts') &&
-          !f.endsWith('.spec.ts') &&
-          !f.endsWith('.d.ts')
-        );
-      }
-    } catch {
-      // tsconfig not found or invalid — fall through to fallback
+      return config.rootNames.filter(f =>
+        !f.includes('node_modules') &&
+        f.endsWith('.ts') &&
+        !f.endsWith('.spec.ts') &&
+        !f.endsWith('.d.ts')
+      );
+    } catch (e: any) {
+      console.warn(`[angular-compiler] Could not read tsconfig at ${tsconfigPath}: ${e.message}`);
+      return [];
     }
-
-    // Fallback: walk srcDirs
-    const srcDirs = opts.srcDirs || ['src'];
-    const files: string[] = [];
-    function walk(dir: string) {
-      if (!fs.existsSync(dir)) return;
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const fullPath = path.resolve(dir, entry.name);
-        if (entry.isDirectory() && entry.name !== 'node_modules') walk(fullPath);
-        else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts') && !entry.name.endsWith('.d.ts')) files.push(fullPath);
-      }
-    }
-    for (const dir of srcDirs) walk(path.resolve(root, dir));
-    return files;
   }
 
   function scanSingleFile(filePath: string) {
