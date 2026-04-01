@@ -1,11 +1,16 @@
 #!/bin/bash
 # Sparse-clone Angular's compliance test fixtures at a specific version.
 # Usage: bash scripts/setup-conformance.sh [version]
-# Default version: 21.0.0
+# Default: latest release from GitHub
 
 set -e
 
-VERSION=${1:-21.0.0}
+if [ -z "$1" ]; then
+  VERSION=$(curl -sL https://api.github.com/repos/angular/angular/releases/latest | grep -o '"tag_name": "[^"]*"' | grep -o '[0-9][0-9.]*')
+  echo "Detected latest Angular release: $VERSION"
+else
+  VERSION=$1
+fi
 TARGET=${ANGULAR_SOURCE_DIR:-.angular-conformance}
 
 if [ -d "$TARGET" ]; then
