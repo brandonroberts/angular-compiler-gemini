@@ -123,6 +123,9 @@ const CATEGORIES = [
   'r3_view_compiler_di',
   'r3_view_compiler',
   'r3_compiler_compliance',
+  'signal_inputs',         // v17-v18 category name
+  'model_inputs',          // v17+ model inputs
+  'output_function',       // v17+ output function
 ];
 
 // Skip test cases known to be unsupported (i18n, partial compilation, etc.)
