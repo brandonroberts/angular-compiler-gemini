@@ -6,7 +6,8 @@
 set -e
 
 if [ -z "$1" ]; then
-  VERSION=$(curl -sL https://api.github.com/repos/angular/angular/releases/latest | grep -o '"tag_name": "[^"]*"' | grep -o '[0-9][0-9.]*')
+  # Auto-detect latest: keep full tag name (may have v prefix)
+  VERSION=$(curl -sL https://api.github.com/repos/angular/angular/releases/latest | grep -o '"tag_name": "[^"]*"' | sed 's/"tag_name": "//;s/"//')
   echo "Detected latest Angular release: $VERSION"
 else
   VERSION=$1
@@ -19,8 +20,19 @@ if [ -d "$TARGET" ]; then
 fi
 
 echo "Cloning Angular $VERSION compliance fixtures into $TARGET..."
-git clone --depth 1 --branch "$VERSION" --filter=blob:none --sparse \
-  https://github.com/angular/angular.git "$TARGET"
+# Try the version as-is first, then with/without v prefix
+if ! git clone --depth 1 --branch "$VERSION" --filter=blob:none --sparse \
+  https://github.com/angular/angular.git "$TARGET" 2>/dev/null; then
+  # Try with v prefix if not present, or without if present
+  if [[ "$VERSION" == v* ]]; then
+    ALT_VERSION="${VERSION#v}"
+  else
+    ALT_VERSION="v$VERSION"
+  fi
+  echo "Tag $VERSION not found, trying $ALT_VERSION..."
+  git clone --depth 1 --branch "$ALT_VERSION" --filter=blob:none --sparse \
+    https://github.com/angular/angular.git "$TARGET"
+fi
 
 cd "$TARGET"
 git sparse-checkout set packages/compiler-cli/test/compliance/test_cases
